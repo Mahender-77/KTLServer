@@ -181,3 +181,29 @@ export const getPublicProducts = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Server Error" });
   }
 };
+
+
+// ─── GET /api/products/public/:id ─────────────────────────────────────────────
+export const getProductById = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const product = await Product.findById(id)
+      .populate("category", "name slug") // include category name + slug
+      .lean();                            // plain JS object, faster than Mongoose doc
+
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Only return active products to public
+    if (!product.isActive) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    return res.status(200).json(product);
+  } catch (error) {
+    console.error("getProductById error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
