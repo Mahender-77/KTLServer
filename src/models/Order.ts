@@ -35,6 +35,24 @@ const orderSchema = new mongoose.Schema(
       default: "placed",
     },
 
+    deliveryPerson: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    deliveryStatus: {
+      type: String,
+      enum: ["assigned", "accepted", "in-transit", "delivered"],
+      default: null,
+    },
+
+    deliveryPersonLocation: {
+      latitude: { type: Number, default: null },
+      longitude: { type: Number, default: null },
+      lastUpdated: { type: Date, default: null },
+    },
+
     address: {
       type: Object,
     },
@@ -42,4 +60,4 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-module.exports = mongoose.model("Order", orderSchema);
+export default mongoose.model("Order", orderSchema);

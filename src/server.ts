@@ -5,6 +5,11 @@ import authRoutes from "./routes/auth.routes";
 import categoryRoutes from "./routes/category.routes";
 import productRoutes from "./routes/product.routes";
 import storeRoutes from "./routes/store.routes";
+import cartRoutes from "./routes/Cart.routes";
+import orderRoutes from "./routes/Order.routes";
+import addressRoutes from "./routes/Address.routes";
+import deliveryRoutes from "./routes/Delivery.routes";
+import { getOrderTracking } from "./controllers/delivery.controller";
 
 import { connectDB } from "./config/db";
 
@@ -21,9 +26,13 @@ app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/stores", storeRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/addresses", addressRoutes);
+app.use("/api/delivery", deliveryRoutes);
+// Public tracking endpoint (no auth required for customers to track orders)
+app.get("/api/delivery/orders/:id/tracking", getOrderTracking);
 app.use("/uploads", express.static("uploads"));
-
-
 
 // Health check
 app.get("/", (_req, res) => {
