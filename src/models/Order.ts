@@ -56,6 +56,14 @@ const orderSchema = new mongoose.Schema(
     address: {
       type: Object,
     },
+
+    // Reference to SubOrders (category-wise split)
+    subOrders: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "SubOrder",
+      },
+    ],
   },
   { timestamps: true },
 );

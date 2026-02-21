@@ -37,6 +37,7 @@ export const registerUser = async (req: Request, res: Response) => {
 
 // 🔐 LOGIN
 export const loginUser = async (req: Request, res: Response) => {
+  console.log("Login request received", req.body);  
   try {
     const { email, password } = req.body;
 
@@ -45,6 +46,7 @@ export const loginUser = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    console.log("User found", user);
 
     const isMatch = await user.comparePassword(password);
 
