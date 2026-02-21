@@ -1,98 +1,196 @@
 import { Request, Response } from "express";
 import Order from "../models/Order";
+import SubOrder from "../models/SubOrder";
 import User from "../models/User";
 
 interface AuthRequest extends Request {
   user?: any;
 }
 
-// ── GET /api/delivery/orders ────────────────────────────────────────────────────
-export const getDeliveryOrders = async (req: AuthRequest, res: Response) => {
+// ── GET /api/delivery/suborders ─────────────────────────────────────────────────
+export const getDeliverySubOrders = async (req: AuthRequest, res: Response) => {
   try {
-    // Get orders assigned to this delivery person or available for assignment
-    const orders = await Order.find({
+    // Get SubOrders assigned to this delivery person or available for assignment
+    const subOrders = await SubOrder.find({
       $or: [
-        { deliveryPerson: req.user._id },
-        { deliveryPerson: null, orderStatus: "placed" },
+        { deliveryBoyId: req.user._id },
+        { deliveryBoyId: null, deliveryStatus: "pending" },
       ],
     })
-      .populate("user", "name email phone")
+      .populate({
+        path: "order",
+        populate: {
+          path: "user",
+          select: "name email phone",
+        },
+        select: "user address createdAt",
+      })
+      .populate("category", "name")
       .populate("items.product", "name images")
+      .populate("deliveryBoyId", "name phone")
       .sort({ createdAt: -1 });
 
-    res.json(orders);
+    res.json(subOrders);
   } catch (err) {
-    console.error("Get delivery orders error:", err);
-    res.status(500).json({ message: "Failed to fetch orders" });
+    console.error("Get delivery suborders error:", err);
+    res.status(500).json({ message: "Failed to fetch suborders" });
   }
 };
 
-// ── POST /api/delivery/orders/:id/accept ────────────────────────────────────────
-export const acceptOrder = async (req: AuthRequest, res: Response) => {
+// ── POST /api/delivery/suborders/:id/accept ─────────────────────────────────────
+export const acceptSubOrder = async (req: AuthRequest, res: Response) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const subOrderId = req.params.id;
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
+    // Atomic update: Only accept if deliveryBoyId is null and status is pending
+    // This prevents race conditions where multiple delivery boys try to accept the same SubOrder
+    const subOrder = await SubOrder.findOneAndUpdate(
+      {
+        _id: subOrderId,
+        deliveryBoyId: null,
+        deliveryStatus: "pending",
+      },
+      {
+        $set: {
+          deliveryBoyId: req.user._id,
+          deliveryStatus: "accepted",
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    )
+      .populate({
+        path: "order",
+        populate: {
+          path: "user",
+          select: "name email phone",
+        },
+      })
+      .populate("category", "name")
+      .populate("items.product", "name images");
+
+    if (!subOrder) {
+      return res.status(400).json({
+        message: "SubOrder not found, already accepted, or not available for acceptance",
+      });
     }
 
-    if (order.deliveryPerson && order.deliveryPerson.toString() !== req.user._id.toString()) {
-      return res.status(400).json({ message: "Order already assigned to another delivery person" });
-    }
-
-    order.deliveryPerson = req.user._id;
-    order.deliveryStatus = "accepted";
-    order.orderStatus = "shipped";
-    await order.save();
-
-    res.json({ message: "Order accepted successfully", order });
+    res.json({
+      message: "SubOrder accepted successfully",
+      subOrder,
+    });
   } catch (err) {
-    console.error("Accept order error:", err);
-    res.status(500).json({ message: "Failed to accept order" });
+    console.error("Accept suborder error:", err);
+    res.status(500).json({ message: "Failed to accept suborder" });
   }
 };
 
-// ── POST /api/delivery/orders/:id/start-delivery ────────────────────────────────
-export const startDelivery = async (req: AuthRequest, res: Response) => {
+// ── POST /api/delivery/suborders/:id/start-delivery ─────────────────────────────
+export const startSubOrderDelivery = async (req: AuthRequest, res: Response) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const subOrderId = req.params.id;
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
+    const subOrder = await SubOrder.findOneAndUpdate(
+      {
+        _id: subOrderId,
+        deliveryBoyId: req.user._id,
+        deliveryStatus: "accepted",
+      },
+      {
+        $set: {
+          deliveryStatus: "out_for_delivery",
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    )
+      .populate({
+        path: "order",
+        populate: {
+          path: "user",
+          select: "name email phone",
+        },
+      })
+      .populate("category", "name")
+      .populate("items.product", "name images");
+
+    if (!subOrder) {
+      return res.status(403).json({
+        message: "SubOrder not found or not authorized to start delivery",
+      });
     }
 
-    if (order.deliveryPerson?.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized to deliver this order" });
-    }
-
-    order.deliveryStatus = "in-transit";
-    await order.save();
-
-    res.json({ message: "Delivery started", order });
+    res.json({ message: "Delivery started", subOrder });
   } catch (err) {
     console.error("Start delivery error:", err);
     res.status(500).json({ message: "Failed to start delivery" });
   }
 };
 
-// ── POST /api/delivery/orders/:id/complete ───────────────────────────────────────
-export const completeDelivery = async (req: AuthRequest, res: Response) => {
+// ── POST /api/delivery/suborders/:id/complete ────────────────────────────────────
+export const completeSubOrderDelivery = async (req: AuthRequest, res: Response) => {
   try {
-    const order = await Order.findById(req.params.id);
+    const subOrderId = req.params.id;
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
+    const subOrder = await SubOrder.findOneAndUpdate(
+      {
+        _id: subOrderId,
+        deliveryBoyId: req.user._id,
+        deliveryStatus: "out_for_delivery",
+      },
+      {
+        $set: {
+          deliveryStatus: "delivered",
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    )
+      .populate({
+        path: "order",
+        populate: {
+          path: "user",
+          select: "name email phone",
+        },
+      })
+      .populate("category", "name")
+      .populate("items.product", "name images");
+
+    if (!subOrder) {
+      return res.status(403).json({
+        message: "SubOrder not found or not authorized to complete delivery",
+      });
     }
 
-    if (order.deliveryPerson?.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Not authorized to deliver this order" });
+    // Check if all SubOrders in the main order are delivered
+    const allSubOrders = await SubOrder.find({
+      order: subOrder.order._id,
+    });
+
+    const allDelivered = allSubOrders.every(
+      (so) => so.deliveryStatus === "delivered"
+    );
+
+    // Update main order status if all SubOrders are delivered
+    if (allDelivered) {
+      await Order.findByIdAndUpdate(subOrder.order._id, {
+        $set: {
+          orderStatus: "delivered",
+        },
+      });
     }
 
-    order.deliveryStatus = "delivered";
-    order.orderStatus = "delivered";
-    await order.save();
-
-    res.json({ message: "Order delivered successfully", order });
+    res.json({
+      message: "SubOrder delivered successfully",
+      subOrder,
+      allDelivered,
+    });
   } catch (err) {
     console.error("Complete delivery error:", err);
     res.status(500).json({ message: "Failed to complete delivery" });
@@ -108,11 +206,12 @@ export const updateLocation = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: "Latitude and longitude are required" });
     }
 
-    // Update location for all in-transit orders assigned to this delivery person
-    await Order.updateMany(
+    // Update location for all active SubOrders assigned to this delivery person
+    // Active means: accepted, out_for_delivery (but not delivered)
+    await SubOrder.updateMany(
       {
-        deliveryPerson: req.user._id,
-        deliveryStatus: "in-transit",
+        deliveryBoyId: req.user._id,
+        deliveryStatus: { $in: ["accepted", "out_for_delivery"] },
       },
       {
         $set: {
@@ -130,12 +229,52 @@ export const updateLocation = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// ── GET /api/delivery/suborders/:id/tracking ─────────────────────────────────────
+export const getSubOrderTracking = async (req: Request, res: Response) => {
+  try {
+    const subOrder = await SubOrder.findById(req.params.id)
+      .populate("deliveryBoyId", "name phone")
+      .populate({
+        path: "order",
+        select: "address user",
+        populate: {
+          path: "user",
+          select: "name phone",
+        },
+      })
+      .select("deliveryBoyId deliveryStatus deliveryPersonLocation order");
+
+    if (!subOrder) {
+      return res.status(404).json({ message: "SubOrder not found" });
+    }
+
+    res.json({
+      deliveryBoy: subOrder.deliveryBoyId,
+      location: subOrder.deliveryPersonLocation,
+      deliveryStatus: subOrder.deliveryStatus,
+      order: subOrder.order,
+    });
+  } catch (err) {
+    console.error("Get tracking error:", err);
+    res.status(500).json({ message: "Failed to fetch tracking info" });
+  }
+};
+
 // ── GET /api/delivery/orders/:id/tracking ────────────────────────────────────────
+// Legacy endpoint for backward compatibility
 export const getOrderTracking = async (req: Request, res: Response) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate("deliveryPerson", "name phone")
-      .select("deliveryPersonLocation deliveryStatus deliveryPerson");
+      .populate({
+        path: "subOrders",
+        populate: {
+          path: "deliveryBoyId",
+          select: "name phone",
+        },
+        select: "deliveryStatus deliveryBoyId deliveryPersonLocation",
+      })
+      .select("deliveryPersonLocation deliveryStatus deliveryPerson subOrders");
 
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -145,6 +284,7 @@ export const getOrderTracking = async (req: Request, res: Response) => {
       deliveryPerson: order.deliveryPerson,
       location: order.deliveryPersonLocation,
       deliveryStatus: order.deliveryStatus,
+      subOrders: order.subOrders,
     });
   } catch (err) {
     console.error("Get tracking error:", err);

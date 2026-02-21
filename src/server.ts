@@ -9,6 +9,7 @@ import cartRoutes from "./routes/Cart.routes";
 import orderRoutes from "./routes/Order.routes";
 import addressRoutes from "./routes/Address.routes";
 import deliveryRoutes from "./routes/Delivery.routes";
+import wishlistRoutes from "./routes/Wishlist.routes";
 import { getOrderTracking } from "./controllers/delivery.controller";
 
 import { connectDB } from "./config/db";
@@ -30,6 +31,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/addresses", addressRoutes);
 app.use("/api/delivery", deliveryRoutes);
+app.use("/api/wishlist", wishlistRoutes);
 // Public tracking endpoint (no auth required for customers to track orders)
 app.get("/api/delivery/orders/:id/tracking", getOrderTracking);
 app.use("/uploads", express.static("uploads"));
