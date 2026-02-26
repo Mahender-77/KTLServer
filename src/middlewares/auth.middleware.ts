@@ -1,46 +1,48 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
+import { AppError } from "../utils/AppError";
 
 interface AuthRequest extends Request {
   user?: any;
 }
 
-// 🔐 Verify JWT Token
 export const protect = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
+  let token: string | undefined;
+
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith("Bearer")
+  ) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
+  if (!token) {
+    return next(new AppError("Not authorized, no token", 401, "NO_TOKEN"));
+  }
+
   try {
-    let token;
-
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
-    }
-
-    if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token" });
-    }
-
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET as string
     ) as { id: string };
 
     const user = await User.findById(decoded.id);
-
     if (!user) {
-      return res.status(401).json({ message: "User not found" });
+      return next(new AppError("User not found", 401, "USER_NOT_FOUND"));
     }
 
     req.user = user;
     next();
-  } catch (error) {
-    return res.status(401).json({ message: "Not authorized, token failed" });
+  } catch (err) {
+    if (err && typeof err === "object" && "name" in err && err.name === "TokenExpiredError") {
+      return next(new AppError("Access token expired", 401, "TOKEN_EXPIRED"));
+    }
+    return next(new AppError("Not authorized, token failed", 401, "TOKEN_INVALID"));
   }
 };
 

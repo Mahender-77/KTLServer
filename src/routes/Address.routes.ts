@@ -6,16 +6,18 @@ import {
   updateAddress,
   deleteAddress,
 } from "../controllers/address.controller";
+import { validate } from "../middlewares/validate.middleware";
+import { asyncHandler } from "../utils/asyncHandler";
+import { idParamSchema } from "../validators/common";
 
 const router = express.Router();
 
-// All address routes are protected — user must be logged in
 router.use(protect);
 
-router.get("/", getAddresses); // GET    /api/addresses
-router.post("/", createAddress); // POST   /api/addresses
-router.put("/:id", updateAddress); // PUT    /api/addresses/:id
-router.delete("/:id", deleteAddress); // DELETE /api/addresses/:id
+router.get("/", asyncHandler(getAddresses));
+router.post("/", asyncHandler(createAddress));
+router.put("/:id", validate(idParamSchema), asyncHandler(updateAddress));
+router.delete("/:id", validate(idParamSchema), asyncHandler(deleteAddress));
 
 export default router;
 

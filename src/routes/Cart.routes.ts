@@ -8,16 +8,22 @@ import {
   removeFromCart,
   updateCartItem,
 } from "../controllers/cart.controller";
+import { validate } from "../middlewares/validate.middleware";
+import { asyncHandler } from "../utils/asyncHandler";
+import {
+  addToCartSchema,
+  removeFromCartSchema,
+  updateCartItemSchema,
+} from "../validators/cart.validator";
 
 const router = express.Router();
 
-// All cart routes are protected — user must be logged in
 router.use(protect);
 
-router.get("/", getCart); // GET    /api/cart
-router.post("/add", addToCart); // POST   /api/cart/add
-router.delete("/remove", removeFromCart); // DELETE /api/cart/remove
-router.patch("/update", updateCartItem); // PATCH  /api/cart/update
-router.delete("/clear", clearCart); // DELETE /api/cart/clear
+router.get("/", asyncHandler(getCart));
+router.post("/add", validate(addToCartSchema), asyncHandler(addToCart));
+router.delete("/remove", validate(removeFromCartSchema), asyncHandler(removeFromCart));
+router.patch("/update", validate(updateCartItemSchema), asyncHandler(updateCartItem));
+router.delete("/clear", asyncHandler(clearCart));
 
 export default router;

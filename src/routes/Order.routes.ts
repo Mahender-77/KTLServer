@@ -6,15 +6,18 @@ import {
   getOrders,
   getOrderById,
 } from "../controllers/order.controller";
+import { validate } from "../middlewares/validate.middleware";
+import { asyncHandler } from "../utils/asyncHandler";
+import { createOrderSchema } from "../validators/order.validator";
+import { idParamSchema } from "../validators/common";
 
 const router = express.Router();
 
-// All order routes are protected — user must be logged in
 router.use(protect);
 
-router.post("/", createOrder); // POST   /api/orders
-router.get("/", getOrders); // GET    /api/orders
-router.get("/:id", getOrderById); // GET    /api/orders/:id
+router.post("/", validate(createOrderSchema), asyncHandler(createOrder));
+router.get("/", asyncHandler(getOrders));
+router.get("/:id", validate(idParamSchema), asyncHandler(getOrderById));
 
 export default router;
 

@@ -1,6 +1,6 @@
 import express from "express";
 import {
- createCategory,
+  createCategory,
   getCategories,
   getFlatCategories,
   getSubCategories,
@@ -9,22 +9,21 @@ import {
   deleteCategory,
 } from "../controllers/category.controller";
 import { protect, adminOnly } from "../middlewares/auth.middleware";
+import { validate } from "../middlewares/validate.middleware";
+import { asyncHandler } from "../utils/asyncHandler";
+import { idParamSchema, parentIdParamSchemaForRoute } from "../validators/common";
 
 const router = express.Router();
 
-// ✅ PUBLIC ROUTE
-router.get("/", getCategories);
-router.get("/:parentId/subcategories", getSubCategories);
+router.get("/", asyncHandler(getCategories));
+router.get("/:parentId/subcategories", validate(parentIdParamSchemaForRoute), asyncHandler(getSubCategories));
 
-// 🔒 ADMIN ROUTES
-router.post("/", protect, adminOnly, createCategory);
-// router.put("/:id", protect, adminOnly, updateCategory);
-router.delete("/:id", protect, adminOnly, deleteCategory);
+router.post("/", protect, adminOnly, asyncHandler(createCategory));
+router.delete("/:id", protect, adminOnly, validate(idParamSchema), asyncHandler(deleteCategory));
 
-// Additional routes
-router.get("/flat", protect, adminOnly, getFlatCategories);
-router.get("/subcategories/:parentId", protect, adminOnly, getSubCategories);
-router.get("/:id", protect, adminOnly, getCategoryById);
+router.get("/flat", protect, adminOnly, asyncHandler(getFlatCategories));
+router.get("/subcategories/:parentId", protect, adminOnly, validate(parentIdParamSchemaForRoute), asyncHandler(getSubCategories));
+router.get("/:id", protect, adminOnly, validate(idParamSchema), asyncHandler(getCategoryById));
 
 
 export default router;

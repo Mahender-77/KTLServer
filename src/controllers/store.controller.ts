@@ -1,44 +1,21 @@
 import { Request, Response } from "express";
-import Store from "../models/Store";
+import { getPaginationParams } from "../utils/pagination";
+import * as storeService from "../services/store.service";
 
-// CREATE STORE
 export const createStore = async (req: Request, res: Response) => {
-  try {
-    const { name, address, city, lat, lng } = req.body;
-
-    const store = await Store.create({
-      name,
-      address,
-      city,
-      location: {
-        lat,
-        lng,
-      },
-    });
-
-    res.status(201).json(store);
-  } catch (error) {
-    console.error("Create Store Error:", error);
-    res.status(500).json({ message: "Server Error" });
-  }
+  const store = await storeService.createStore(req.body);
+  res.status(201).json(store);
 };
 
-// GET ALL STORES
-export const getStores = async (_req: Request, res: Response) => {
-  try {
-    const stores = await Store.find().sort({ createdAt: -1 });
-    res.json(stores);
-  } catch {
-    res.status(500).json({ message: "Server Error" });
-  }
+export const getStores = async (req: Request, res: Response) => {
+  const { page, limit, skip } = getPaginationParams(req);
+  const result = await storeService.getStores({ page, limit, skip });
+  res.json(result);
 };
 
-// DELETE STORE
 export const deleteStore = async (req: Request, res: Response) => {
-  try {
-    await Store.findByIdAndDelete(req.params.id);
-    res.json({ message: "Store deleted" });
-  } catch {
-    res.status(500).json({ message: "Server Error" });
-  }
+  const raw = req.params.id;
+  const id = typeof raw === "string" ? raw : (raw?.[0] ?? "");
+  const result = await storeService.deleteStore(id);
+  res.json(result);
 };

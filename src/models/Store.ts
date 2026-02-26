@@ -14,4 +14,6 @@ const storeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+storeSchema.index({ createdAt: -1 });
+
 export default mongoose.model("Store", storeSchema);
