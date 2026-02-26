@@ -34,6 +34,9 @@ const categorySchema = new Schema<ICategory>(
   { timestamps: true }
 );
 
+// Subcategory lookups and tree building: find children by parent
+categorySchema.index({ parent: 1 });
+
 const Category = mongoose.model<ICategory>("Category", categorySchema);
 
 export default Category;

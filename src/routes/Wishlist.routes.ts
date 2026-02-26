@@ -1,4 +1,3 @@
-// server/routes/Wishlist.routes.ts
 import express from "express";
 import { protect } from "../middlewares/auth.middleware";
 import {
@@ -6,15 +5,15 @@ import {
   addToWishlist,
   removeFromWishlist,
 } from "../controllers/wishlist.controller";
+import { asyncHandler } from "../utils/asyncHandler";
 
 const router = express.Router();
 
-// All wishlist routes are protected — user must be logged in
 router.use(protect);
 
-router.get("/", getWishlist); // GET    /api/wishlist
-router.post("/add", addToWishlist); // POST   /api/wishlist/add
-router.delete("/remove", removeFromWishlist); // DELETE /api/wishlist/remove
+router.get("/", asyncHandler(getWishlist));
+router.post("/add", asyncHandler(addToWishlist));
+router.delete("/remove", asyncHandler(removeFromWishlist));
 
 export default router;
 

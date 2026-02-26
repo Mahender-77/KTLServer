@@ -1,5 +1,14 @@
 import mongoose from "mongoose";
 
+const batchUsedSchema = new mongoose.Schema(
+  {
+    store: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true },
+    quantityDeducted: { type: Number, required: true, min: 1 },
+    batchId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  },
+  { _id: false }
+);
+
 const orderItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
@@ -10,6 +19,8 @@ const orderItemSchema = new mongoose.Schema({
   },
   quantity: Number,
   price: Number,
+  /** Batch-wise fulfilment: which batches were used (FIFO) for this item */
+  batchesUsed: [batchUsedSchema],
 });
 
 const orderSchema = new mongoose.Schema(
@@ -67,5 +78,8 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// List orders by user, newest first (GET /api/orders paginated)
+orderSchema.index({ user: 1, createdAt: -1 });
 
 export default mongoose.model("Order", orderSchema);
