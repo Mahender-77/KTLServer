@@ -9,6 +9,8 @@ const storeSchema = new mongoose.Schema(
       lat: Number,
       lng: Number,
     },
+    // Delivery fee in ₹ for orders fulfilled from this store
+    deliveryFee: { type: Number, min: 0, default: 40 },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

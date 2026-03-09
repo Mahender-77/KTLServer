@@ -167,6 +167,46 @@ export const deleteProduct = async (req: Request, res: Response) => {
   res.json(result);
 };
 
+export const updateProduct = async (req: Request, res: Response) => {
+  const id = paramId(req.params.id);
+  if (!id) throw new AppError("Product ID is required", 400, "INVALID_ID");
+
+  const body = req.body ?? {};
+  const pricingMode = (
+    ["fixed", "custom-weight", "unit"] as const
+  ).includes(body.pricingMode)
+    ? (body.pricingMode as "fixed" | "custom-weight" | "unit")
+    : undefined;
+
+  const variants = parseJsonField<any[]>(body.variants, "variants");
+  const tags = parseJsonField<string[]>(body.tags, "tags");
+
+  const file = req.file as { path?: string; url?: string; secure_url?: string } | undefined;
+  const imageUrl = file ? (file.path ?? file.secure_url ?? file.url ?? null) : null;
+
+  const updateData: Parameters<typeof productService.updateProduct>[1] = {};
+
+  if (body.name != null) updateData.name = body.name;
+  if (body.description !== undefined) updateData.description = body.description;
+  if (body.category != null) updateData.category = body.category;
+  if (pricingMode != null) updateData.pricingMode = pricingMode;
+  if (body.baseUnit != null) updateData.baseUnit = body.baseUnit as any;
+  if (body.pricePerUnit != null) updateData.pricePerUnit = coerceNumber(body.pricePerUnit);
+  if (body.hasExpiry !== undefined) updateData.hasExpiry = coerceBool(body.hasExpiry);
+  const rawShelf = coerceNumber(body.shelfLifeDays);
+  if (rawShelf !== undefined) updateData.shelfLifeDays = rawShelf && rawShelf > 0 ? rawShelf : null;
+  if (tags !== undefined) updateData.tags = tags ?? [];
+  if (variants !== undefined) updateData.variants = variants;
+  if (imageUrl != null) updateData.imageUrl = imageUrl;
+  if (body.taxRate !== undefined) updateData.taxRate = coerceNumber(body.taxRate) ?? null;
+  if (body.minOrderQty !== undefined) updateData.minOrderQty = coerceNumber(body.minOrderQty) ?? null;
+  if (body.maxOrderQty !== undefined) updateData.maxOrderQty = coerceNumber(body.maxOrderQty) ?? null;
+  if (body.isActive !== undefined) updateData.isActive = coerceBool(body.isActive);
+
+  const product = await productService.updateProduct(id, updateData);
+  res.status(200).json(product);
+};
+
 export const addBatch = async (req: Request, res: Response) => {
   const id = paramId(req.params.id);
   const result = await productService.addBatch(id, req.body);
@@ -177,5 +217,11 @@ export const getExpiringBatches = async (req: Request, res: Response) => {
   const days = parseDays(req.query.days as string | undefined);
   const { page, limit, skip } = getPaginationParams(req);
   const result = await productService.getExpiringBatches({ days, page, limit, skip });
+  res.json(result);
+};
+
+export const getDealOfTheDay = async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(String(req.query.limit || 20), 10) || 20, 50);
+  const result = await productService.getDealOfTheDay({ limit });
   res.json(result);
 };

@@ -19,7 +19,7 @@ export async function getDeliverySubOrders(
       .populate({
         path: "order",
         populate: { path: "user", select: "name email phone" },
-        select: "user address createdAt",
+        select: "user address createdAt totalAmount paymentStatus orderStatus",
       })
       .populate("category", "name")
       .populate("items.product", "name images")
@@ -46,6 +46,7 @@ export async function acceptSubOrder(userId: string, subOrderId: string) {
     .populate({
       path: "order",
       populate: { path: "user", select: "name email phone" },
+      select: "user address createdAt totalAmount paymentStatus orderStatus",
     })
     .populate("category", "name")
     .populate("items.product", "name images");
@@ -69,6 +70,7 @@ export async function startSubOrderDelivery(userId: string, subOrderId: string) 
     .populate({
       path: "order",
       populate: { path: "user", select: "name email phone" },
+      select: "user address createdAt totalAmount paymentStatus orderStatus",
     })
     .populate("category", "name")
     .populate("items.product", "name images");
@@ -96,6 +98,7 @@ export async function completeSubOrderDelivery(userId: string, subOrderId: strin
     .populate({
       path: "order",
       populate: { path: "user", select: "name email phone" },
+      select: "user address createdAt totalAmount paymentStatus orderStatus",
     })
     .populate("category", "name")
     .populate("items.product", "name images");

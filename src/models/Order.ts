@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const batchUsedSchema = new mongoose.Schema(
   {
     store: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true },
-    quantityDeducted: { type: Number, required: true, min: 1 },
+    quantityDeducted: { type: Number, required: true, min: 0 },
     batchId: { type: mongoose.Schema.Types.ObjectId, required: true },
   },
   { _id: false }

@@ -13,6 +13,18 @@ export const getStores = async (req: Request, res: Response) => {
   res.json(result);
 };
 
+export const getPublicStores = async (_req: Request, res: Response) => {
+  const stores = await storeService.getPublicStores();
+  res.json({ data: stores });
+};
+
+export const updateStore = async (req: Request, res: Response) => {
+  const raw = req.params.id;
+  const id = typeof raw === "string" ? raw : (raw?.[0] ?? "");
+  const store = await storeService.updateStore(id, req.body);
+  res.json(store);
+};
+
 export const deleteStore = async (req: Request, res: Response) => {
   const raw = req.params.id;
   const id = typeof raw === "string" ? raw : (raw?.[0] ?? "");
