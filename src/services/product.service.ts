@@ -291,6 +291,80 @@ export async function getProducts(params: {
   return paginated(products.map(formatProductForListing), total, page, limit);
 }
 
+// ─── updateProduct ────────────────────────────────────────────────────────────
+
+export async function updateProduct(
+  id: string,
+  data: {
+    name?: string;
+    description?: string;
+    category?: string;
+    pricingMode?: "fixed" | "custom-weight" | "unit";
+    baseUnit?: "kg" | "g" | "ml" | "l" | "pcs";
+    pricePerUnit?: number;
+    hasExpiry?: boolean;
+    shelfLifeDays?: number | null;
+    variants?: any[];
+    imageUrl?: string | null;
+    tags?: string[];
+    taxRate?: number | null;
+    minOrderQty?: number | null;
+    maxOrderQty?: number | null;
+    isActive?: boolean;
+  }
+) {
+  const product = await Product.findById(id);
+  if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+
+  const {
+    name, description, category, pricingMode, baseUnit, pricePerUnit,
+    hasExpiry, shelfLifeDays, variants, imageUrl, tags,
+    taxRate, minOrderQty, maxOrderQty, isActive,
+  } = data;
+
+  if (name != null) product.name = name;
+  if (description !== undefined) product.description = description || undefined;
+  if (category != null) product.category = category as any;
+  if (pricingMode != null) product.pricingMode = pricingMode;
+  if (baseUnit != null) product.baseUnit = baseUnit;
+  if (pricePerUnit != null) product.pricePerUnit = pricePerUnit;
+  if (hasExpiry !== undefined) product.hasExpiry = hasExpiry;
+  if (shelfLifeDays !== undefined) product.shelfLifeDays = shelfLifeDays && shelfLifeDays > 0 ? shelfLifeDays : undefined;
+  if (taxRate !== undefined) product.taxRate = taxRate ?? undefined;
+  if (minOrderQty !== undefined) product.minOrderQty = minOrderQty ?? undefined;
+  if (maxOrderQty !== undefined) product.maxOrderQty = maxOrderQty ?? undefined;
+  if (isActive !== undefined) product.isActive = isActive;
+
+  if (Array.isArray(tags)) product.tags = tags.filter(Boolean);
+  if (Array.isArray(variants)) product.variants = variants;
+
+  if (imageUrl != null) {
+    if (imageUrl) {
+      const current = (product.images ?? []) as string[];
+      product.images = current.length ? [imageUrl, ...current.filter((u) => u !== imageUrl)].slice(0, 5) : [imageUrl];
+    }
+  }
+
+  if (name != null && name.trim()) {
+    let slug = slugify(name, { lower: true, strict: true });
+    const exists = await Product.findOne({ slug, _id: { $ne: id } }).select("_id").lean();
+    if (exists) slug = `${slug}-${Date.now().toString(36)}`;
+    product.slug = slug;
+  }
+
+  if (minOrderQty !== undefined && maxOrderQty !== undefined && minOrderQty != null && maxOrderQty != null && minOrderQty > maxOrderQty) {
+    throw new AppError("minOrderQty cannot be greater than maxOrderQty", 400, "INVALID_ORDER_QTY");
+  }
+  if (pricingMode === "fixed" && Array.isArray(variants) && variants.length === 0) {
+    throw new AppError("At least one variant is required for fixed pricing", 400, "MISSING_FIELDS");
+  }
+
+  await product.save();
+  const updated = await Product.findById(id).populate("category", "name slug").lean();
+  if (!updated) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  return formatProductForListing(updated);
+}
+
 // ─── deleteProduct ────────────────────────────────────────────────────────────
 
 export async function deleteProduct(id: string) {
@@ -536,4 +610,69 @@ export async function getExpiringBatches(params: {
   }));
 
   return paginated(data, total, page, limit);
+}
+
+// ─── Deal of the Day helpers ───────────────────────────────────────────────────
+
+const DEAL_EXPIRING_DAYS = 2;
+export const DEAL_DISCOUNT_PERCENT = 5;
+
+/** Check if product has inventory expiring within DEAL_EXPIRING_DAYS days (for 5% deal discount) */
+export function qualifiesForDealOfTheDay(productDoc: {
+  hasExpiry?: boolean;
+  inventoryBatches?: Array<{ quantity?: number; expiryDate?: Date | string }>;
+}): boolean {
+  const batches = productDoc.inventoryBatches ?? [];
+  if (productDoc.hasExpiry !== true || !batches.length) return false;
+  const start = now();
+  const endDate = new Date(
+    start.getTime() + DEAL_EXPIRING_DAYS * 24 * 60 * 60 * 1000
+  );
+  return batches.some((b) => {
+    const qty = Number(b.quantity) || 0;
+    if (qty <= 0) return false;
+    const expiry = b.expiryDate ? new Date(b.expiryDate) : null;
+    return expiry && expiry >= start && expiry <= endDate;
+  });
+}
+
+/** Products with inventory expiring within DEAL_EXPIRING_DAYS days — for Deal of the Day */
+export async function getDealOfTheDay(params?: { limit?: number }) {
+  const limit = Math.min(Math.max(params?.limit ?? 20, 1), 50);
+  const start = now();
+  const endDate = new Date(
+    start.getTime() + DEAL_EXPIRING_DAYS * 24 * 60 * 60 * 1000
+  );
+
+  const filter: any = {
+    isActive: true,
+    hasExpiry: true,
+    "inventoryBatches.0": { $exists: true },
+    "inventoryBatches.expiryDate": { $gte: start, $lte: endDate },
+    "inventoryBatches.quantity": { $gt: 0 },
+  };
+
+  const products = await Product.find(filter)
+    .populate("category", "name slug")
+    .sort({ "inventoryBatches.expiryDate": 1 })
+    .limit(limit * 2) // fetch extra, then filter
+    .lean();
+
+  // Post-filter: only include products that have at least one batch expiring within window
+  // and have available stock after computeAvailableQuantity
+  const filtered = products.filter((p: any) => {
+    const hasExpiringBatch = (p.inventoryBatches ?? []).some((b: any) => {
+      const expiry = b.expiryDate ? new Date(b.expiryDate) : null;
+      return expiry && expiry >= start && expiry <= endDate && (Number(b.quantity) || 0) > 0;
+    });
+    if (!hasExpiringBatch) return false;
+    return computeAvailableQuantity(p) > 0;
+  });
+
+  const formatted = filtered.slice(0, limit).map((p: any) => ({
+    ...formatProductForListing(p),
+    dealDiscountPercent: DEAL_DISCOUNT_PERCENT,
+  }));
+
+  return { data: formatted };
 }

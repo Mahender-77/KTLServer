@@ -1,23 +1,47 @@
 import Cart from "../models/Cart";
 import Product from "../models/Product";
 import { AppError } from "../utils/AppError";
+import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
 
 async function formatCartItems(cartItems: any[]) {
   const formattedItems = await Promise.all(
     cartItems.map(async (item) => {
       try {
         let product = item.product;
+        const select = "name images variants pricingMode pricePerUnit baseUnit hasExpiry inventoryBatches";
         if (typeof product === "string") {
-          product = await Product.findById(product).select("name images variants");
-        } else if (product && (!product.variants || product.variants.length === 0)) {
-          product = await Product.findById(product._id).select("name images variants");
+          product = await Product.findById(product).select(select).lean();
+        } else if (product) {
+          product = await Product.findById(product._id).select(select).lean();
         }
         if (!product) return null;
 
-        const variant = product.variants?.find(
-          (v: any) => v._id?.toString() === item.variant.toString()
+        const variantIdStr = item.variant != null ? String(item.variant) : "";
+        const variant = (product.variants || []).find(
+          (v: any) => (v._id != null ? String(v._id) : "") === variantIdStr
         );
-        if (!variant) return null;
+
+        const variantPrice = variant != null ? Number(variant.price) : NaN;
+        const variantOfferPrice = variant != null && variant.offerPrice != null ? Number(variant.offerPrice) : NaN;
+        const hasValidOffer = !Number.isNaN(variantOfferPrice) && variantOfferPrice > 0 && variantOfferPrice < variantPrice;
+
+        // For fixed pricing: use variant. Use original price when offer price is missing or zero.
+        let price = variant
+          ? (hasValidOffer ? variantOfferPrice : (Number.isNaN(variantPrice) ? 0 : variantPrice))
+          : (Number(product.pricePerUnit) || 0);
+
+        // Fallback: if price is still 0 but we have a variant with price, use it (e.g. variant lookup edge case)
+        if (price <= 0 && variant && variantPrice > 0) {
+          price = variantPrice;
+        }
+
+        // Apply Deal of the Day 5% discount if product qualifies (expiring in 2 days)
+        const isDeal = qualifiesForDealOfTheDay(product);
+        if (isDeal) {
+          price = price * (1 - DEAL_DISCOUNT_PERCENT / 100);
+        }
+
+        const originalPrice = variant != null && !Number.isNaN(variantPrice) ? variantPrice : undefined;
 
         return {
           _id: item._id,
@@ -28,8 +52,10 @@ async function formatCartItems(cartItems: any[]) {
           },
           variant: item.variant.toString(),
           quantity: item.quantity,
-          price: variant.price || 0,
-          offerPrice: variant.offerPrice,
+          price,
+          originalPrice,
+          offerPrice: variant?.offerPrice != null ? Number(variant.offerPrice) : undefined,
+          ...(isDeal && { dealDiscountPercent: DEAL_DISCOUNT_PERCENT }),
         };
       } catch {
         return null;

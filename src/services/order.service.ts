@@ -5,6 +5,7 @@ import SubOrder from "../models/SubOrder";
 import mongoose, { ClientSession } from "mongoose";
 import { paginated, PaginatedResponse } from "../utils/pagination";
 import { AppError } from "../utils/AppError";
+import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
 
 type BatchDoc = {
   _id: mongoose.Types.ObjectId;
@@ -156,13 +157,47 @@ export async function createOrder(
     const productIds = items.map((item: any) => new mongoose.Types.ObjectId(item.product));
     const products = await Product.find({ _id: { $in: productIds } })
       .populate("category", "name")
-      .select("name category inventoryBatches")
-      .session(session);
+      .select("name category inventoryBatches variants pricingMode pricePerUnit hasExpiry")
+      .session(session)
+      .lean();
 
     if (products.length !== items.length) {
       await session.abortTransaction();
       throw new AppError("Some products not found", 400, "PRODUCTS_NOT_FOUND");
     }
+
+    const productById = new Map(products.map((p: any) => [p._id.toString(), p]));
+
+    // Recompute prices server-side (honors Deal of the Day 5% discount)
+    const itemPrices = new Map<string, number>();
+    for (const item of items) {
+      const product = productById.get(item.product.toString());
+      if (!product) continue;
+      const variant = (product.variants ?? []).find(
+        (v: any) => v._id?.toString() === item.variant.toString()
+      );
+      // Use original price when offer price is missing or zero
+      let price = variant
+        ? ((variant.offerPrice != null && variant.offerPrice > 0) ? variant.offerPrice : (variant.price ?? 0))
+        : (Number(product.pricePerUnit) || 0);
+      if (qualifiesForDealOfTheDay(product)) {
+        price = price * (1 - DEAL_DISCOUNT_PERCENT / 100);
+      }
+      itemPrices.set(`${item.product}:${item.variant}`, price);
+    }
+
+    // Replace client prices with server-computed prices
+    const itemsWithServerPrice = items.map((item: any) => ({
+      ...item,
+      price: itemPrices.get(`${item.product}:${item.variant}`) ?? item.price,
+    }));
+
+    const serverSubtotal = itemsWithServerPrice.reduce(
+      (sum, item) => sum + (item.price || 0) * (item.quantity || 0),
+      0
+    );
+    const deliveryFee = serverSubtotal > 500 ? 0 : 40;
+    const serverTotalAmount = serverSubtotal + deliveryFee;
 
     const productVariantQty = new Map<
       string,
@@ -188,7 +223,6 @@ export async function createOrder(
     }
 
     const productIdToName = new Map(products.map((p: any) => [p._id.toString(), p.name]));
-    const productById = new Map(products.map((p: any) => [p._id.toString(), p]));
     const now = new Date();
 
     type BatchAllocation = { productId: mongoose.Types.ObjectId; batchId: mongoose.Types.ObjectId; store: mongoose.Types.ObjectId; deduct: number };
@@ -199,30 +233,52 @@ export async function createOrder(
     >();
 
     for (const [key, { productId, variantId, quantity }] of productVariantQty) {
-      const product = productById.get(productId.toString());
+      const product = productById.get(productId.toString()) as any;
       if (!product) {
         await session.abortTransaction();
         throw new AppError("Product not found", 400, "PRODUCTS_NOT_FOUND");
       }
 
+      const pricingMode = product.pricingMode ?? "unit";
+      const hasExpiry = product.hasExpiry === true;
+      const isFixedPricing = pricingMode === "fixed";
+
       const batches = (product.inventoryBatches ?? []) as Array<{
         _id: mongoose.Types.ObjectId;
         store: mongoose.Types.ObjectId;
-        variant: mongoose.Types.ObjectId;
+        variant?: mongoose.Types.ObjectId;
         quantity: number;
-        expiryDate: Date;
+        expiryDate?: Date;
+        createdAt?: Date;
       }>;
+
       const validBatches = batches
-        .filter(
-          (b) =>
-            b.variant?.toString() === variantId.toString() &&
-            (Number(b.quantity) || 0) > 0 &&
-            (b.expiryDate ? new Date(b.expiryDate) > now : false)
-        )
-        .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+        .filter((b) => {
+          const qty = Number(b.quantity) || 0;
+          if (qty <= 0) return false;
+          // Expiry: include batch if no expiry OR expiry is in future
+          if (hasExpiry && b.expiryDate) {
+            if (new Date(b.expiryDate) <= now) return false;
+          }
+          // Variant: for fixed pricing, batch must match variant; for unit/custom-weight, variantId is productId, batches may not have variant
+          if (isFixedPricing) {
+            if (b.variant?.toString() !== variantId.toString()) return false;
+          } else {
+            if (b.variant != null && b.variant.toString() !== variantId.toString()) return false;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          if (hasExpiry && a.expiryDate && b.expiryDate) {
+            return new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime();
+          }
+          const aT = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bT = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return aT - bT;
+        });
 
       const totalAvailable = validBatches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
-      if (totalAvailable < quantity) {
+      if (validBatches.length > 0 && totalAvailable < quantity) {
         await session.abortTransaction();
         const name = productIdToName.get(productId.toString()) || "Product";
         throw new AppError(
@@ -290,7 +346,7 @@ export async function createOrder(
     };
     const categoryGroups = new Map<string, CategoryGroup>();
 
-    items.forEach((item: any) => {
+    itemsWithServerPrice.forEach((item: any) => {
       const productId = item.product.toString();
       const categoryInfo = productCategoryMap.get(productId);
       if (!categoryInfo) throw new Error(`Category not found for product ${productId}`);
@@ -312,7 +368,7 @@ export async function createOrder(
 
     const order = new Order({
       user: userId,
-      items: items.map((item: any) => {
+      items: itemsWithServerPrice.map((item: any) => {
         const key = `${item.product}:${item.variant}`;
         const batchesUsed = batchesUsedByKey.get(key) ?? [];
         return {
@@ -327,7 +383,7 @@ export async function createOrder(
           })),
         };
       }),
-      totalAmount,
+      totalAmount: serverTotalAmount,
       address: {
         name: address.name,
         phone: address.phone,
@@ -425,6 +481,58 @@ export async function getOrderById(userId: string, orderId: string) {
         { path: "deliveryBoyId", select: "name phone" },
       ],
     });
+  if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+  return order;
+}
+
+/** Admin: get all orders with user + delivery info */
+export async function getOrdersForAdmin(params: {
+  page: number;
+  limit: number;
+  skip: number;
+  status?: string;
+  paymentStatus?: string;
+}): Promise<PaginatedResponse<any>> {
+  const { page, limit, skip, status, paymentStatus } = params;
+  const filter: Record<string, unknown> = {};
+  if (status && status !== "all") filter.orderStatus = status;
+  if (paymentStatus && paymentStatus !== "all") filter.paymentStatus = paymentStatus;
+
+  const [orders, total] = await Promise.all([
+    Order.find(filter)
+      .populate("user", "name email phone")
+      .populate("deliveryPerson", "name email phone")
+      .populate("items.product", "name images")
+      .populate({
+        path: "subOrders",
+        populate: [
+          { path: "category", select: "name" },
+          { path: "deliveryBoyId", select: "name email phone" },
+        ],
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Order.countDocuments(filter),
+  ]);
+  return paginated(orders, total, page, limit);
+}
+
+/** Admin: get single order by ID with full details */
+export async function getOrderByIdForAdmin(orderId: string) {
+  const order = await Order.findOne({ _id: orderId })
+    .populate("user", "name email phone")
+    .populate("deliveryPerson", "name email phone")
+    .populate("items.product", "name images variants")
+    .populate({
+      path: "subOrders",
+      populate: [
+        { path: "category", select: "name" },
+        { path: "deliveryBoyId", select: "name email phone" },
+      ],
+    })
+    .lean();
   if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
   return order;
 }

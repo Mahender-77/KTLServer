@@ -4,7 +4,7 @@ import { objectIdString } from "./common";
 const orderItemSchema = z.object({
   product: objectIdString,
   variant: objectIdString,
-  quantity: z.number().int().positive("Quantity must be at least 1"),
+  quantity: z.number().positive("Quantity must be greater than 0"),
   price: z.number().min(0, "Price must be non-negative"),
 });
 
