@@ -5,7 +5,11 @@ import SubOrder from "../models/SubOrder";
 import mongoose, { ClientSession } from "mongoose";
 import { paginated, PaginatedResponse } from "../utils/pagination";
 import { AppError } from "../utils/AppError";
+import { ROLES } from "../constants/roles";
+import type { RequestActor } from "../types/access";
 import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
+import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
+import { tenantFilterFromActor } from "../utils/tenantFilter";
 
 type BatchDoc = {
   _id: mongoose.Types.ObjectId;
@@ -29,12 +33,16 @@ export async function processOrderStock(
   productId: string,
   storeId: string,
   orderQuantity: number,
+  organizationId: string,
   options?: { session?: ClientSession; productName?: string }
 ): Promise<void> {
   if (orderQuantity <= 0) return;
 
   // 1. Load product
-  const product = await Product.findById(productId)
+  const product = await Product.findOne({
+    _id: productId,
+    ...tenantWhereClause(organizationId),
+  })
     .select("name hasExpiry inventoryBatches")
     .session(options?.session ?? null)
     .lean();
@@ -95,6 +103,7 @@ export async function processOrderStock(
     const updated = await Product.findOneAndUpdate(
       {
         _id: pid,
+        ...tenantWhereClause(organizationId),
         "inventoryBatches._id": batch._id,
         "inventoryBatches.quantity": { $gte: take },
       },
@@ -113,7 +122,7 @@ export async function processOrderStock(
 }
 
 export async function createOrder(
-  userId: string,
+  actor: RequestActor,
   data: {
     items: Array<{ product: string; variant: string; quantity: number; price: number }>;
     totalAmount: number;
@@ -132,6 +141,8 @@ export async function createOrder(
   session.startTransaction();
 
   try {
+    const userId = actor.userId;
+    const organizationId = actor.organizationId;
     const { items, totalAmount, address, paymentMethod } = data;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -155,9 +166,12 @@ export async function createOrder(
     }
 
     const productIds = items.map((item: any) => new mongoose.Types.ObjectId(item.product));
-    const products = await Product.find({ _id: { $in: productIds } })
+    const products = await Product.find({
+      _id: { $in: productIds },
+      ...tenantWhereClause(organizationId),
+    })
       .populate("category", "name")
-      .select("name category inventoryBatches variants pricingMode pricePerUnit hasExpiry")
+      .select("name category inventoryBatches variants pricingMode pricePerUnit hasExpiry organizationId")
       .session(session)
       .lean();
 
@@ -310,6 +324,7 @@ export async function createOrder(
       const updated = await Product.findOneAndUpdate(
         {
           _id: productId,
+          ...tenantWhereClause(organizationId),
           "inventoryBatches._id": batchId,
           "inventoryBatches.quantity": { $gte: deduct },
         },
@@ -367,6 +382,7 @@ export async function createOrder(
     });
 
     const order = new Order({
+      organizationId,
       user: userId,
       items: itemsWithServerPrice.map((item: any) => {
         const key = `${item.product}:${item.variant}`;
@@ -405,6 +421,7 @@ export async function createOrder(
         0
       );
       const subOrder = new SubOrder({
+        organizationId,
         order: order._id,
         category: group.categoryId,
         categoryName: group.categoryName,
@@ -419,7 +436,10 @@ export async function createOrder(
     order.subOrders = subOrderIds;
     await order.save({ session });
 
-    const cart = await Cart.findOne({ user: userId }).session(session);
+    const cart = await Cart.findOne({
+      user: userId,
+      ...tenantWhereClause(organizationId),
+    }).session(session);
     if (cart) {
       cart.items.splice(0, cart.items.length);
       await cart.save({ session });
@@ -447,11 +467,16 @@ export async function createOrder(
 }
 
 export async function getOrders(
-  userId: string,
+  actor: RequestActor,
   params: { page: number; limit: number; skip: number }
 ): Promise<PaginatedResponse<any>> {
   const { page, limit, skip } = params;
-  const filter = { user: userId };
+  const base = tenantFilterFromActor({
+    organizationId: actor.organizationId,
+    isSuperAdmin: false,
+  });
+  const filter =
+    actor.role === ROLES.ADMIN ? base : { ...base, user: actor.userId };
   const [orders, total] = await Promise.all([
     Order.find(filter)
       .populate("items.product", "name images")
@@ -471,8 +496,10 @@ export async function getOrders(
   return paginated(orders, total, page, limit);
 }
 
-export async function getOrderById(userId: string, orderId: string) {
-  const order = await Order.findOne({ _id: orderId, user: userId })
+async function loadOrderDetailById(orderId: string, organizationId: string) {
+  return Order.findOne({
+    ...tenantScopedIdFilter(organizationId, orderId),
+  })
     .populate("items.product", "name images")
     .populate({
       path: "subOrders",
@@ -481,8 +508,48 @@ export async function getOrderById(userId: string, orderId: string) {
         { path: "deliveryBoyId", select: "name phone" },
       ],
     });
-  if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
-  return order;
+}
+
+/**
+ * Single order for non-admin routes: owner, admin (full), or delivery (assigned to a suborder).
+ */
+export async function getOrderById(actor: RequestActor, orderId: string) {
+  const stub = await Order.findOne(tenantScopedIdFilter(actor.organizationId, orderId))
+    .select("_id user organizationId")
+    .lean();
+  if (!stub) {
+    throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+  }
+
+  if (actor.role === ROLES.ADMIN) {
+    const order = await loadOrderDetailById(orderId, actor.organizationId);
+    if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+    return order;
+  }
+
+  const ownerId = stub.user?.toString?.() ?? String(stub.user);
+  if (ownerId === actor.userId) {
+    const order = await loadOrderDetailById(orderId, actor.organizationId);
+    if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+    return order;
+  }
+
+  if (actor.role === ROLES.DELIVERY) {
+    const assigned = await SubOrder.exists(
+      andWithTenant(actor.organizationId, {
+        order: orderId,
+        deliveryBoyId: actor.userId,
+      })
+    );
+    if (!assigned) {
+      throw new AppError("You do not have access to this order", 403, "ORDER_ACCESS_DENIED");
+    }
+    const order = await loadOrderDetailById(orderId, actor.organizationId);
+    if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+    return order;
+  }
+
+  throw new AppError("You do not have access to this order", 403, "ORDER_ACCESS_DENIED");
 }
 
 /** Admin: get all orders with user + delivery info */
@@ -492,9 +559,14 @@ export async function getOrdersForAdmin(params: {
   skip: number;
   status?: string;
   paymentStatus?: string;
+  organizationId: string;
+  isSuperAdmin?: boolean;
 }): Promise<PaginatedResponse<any>> {
-  const { page, limit, skip, status, paymentStatus } = params;
-  const filter: Record<string, unknown> = {};
+  const { page, limit, skip, status, paymentStatus, organizationId } = params;
+  const filter: Record<string, unknown> = tenantFilterFromActor({
+    organizationId,
+    isSuperAdmin: false,
+  });
   if (status && status !== "all") filter.orderStatus = status;
   if (paymentStatus && paymentStatus !== "all") filter.paymentStatus = paymentStatus;
 
@@ -520,8 +592,11 @@ export async function getOrdersForAdmin(params: {
 }
 
 /** Admin: get single order by ID with full details */
-export async function getOrderByIdForAdmin(orderId: string) {
-  const order = await Order.findOne({ _id: orderId })
+export async function getOrderByIdForAdmin(
+  orderId: string,
+  organizationId: string
+) {
+  const order = await Order.findOne({ _id: orderId, ...tenantWhereClause(organizationId) })
     .populate("user", "name email phone")
     .populate("deliveryPerson", "name email phone")
     .populate("items.product", "name images variants")

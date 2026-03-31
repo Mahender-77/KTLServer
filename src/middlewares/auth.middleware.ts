@@ -1,15 +1,18 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import User from "../models/User";
 import { AppError } from "../utils/AppError";
+import { getJwtAccessSecret } from "../config/env";
+import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap";
 
-interface AuthRequest extends Request {
-  user?: any;
+export interface AuthRequest extends Request {
+  user?: InstanceType<typeof User>;
 }
 
 export const protect = async (
   req: AuthRequest,
-  res: Response,
+  _res: Response,
   next: NextFunction
 ) => {
   let token: string | undefined;
@@ -26,14 +29,45 @@ export const protect = async (
   }
 
   try {
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET as string
-    ) as { id: string };
+    const decoded = jwt.verify(token, getJwtAccessSecret()) as {
+      id: string;
+      organizationId?: string;
+      isSuperAdmin?: boolean;
+    };
 
     const user = await User.findById(decoded.id);
     if (!user) {
       return next(new AppError("User not found", 401, "USER_NOT_FOUND"));
+    }
+
+    const isSuperAdmin = user.isSuperAdmin === true;
+    const tokenOrgId = decoded.organizationId;
+
+    if (!isSuperAdmin) {
+      // Backfill missing user.organizationId from token claim or default org (legacy safety).
+      if (user.organizationId == null) {
+        const sourceOrgId = tokenOrgId ?? tryGetDefaultOrganizationId();
+        if (sourceOrgId) {
+          user.set("organizationId", new mongoose.Types.ObjectId(sourceOrgId));
+          await User.updateOne(
+            { _id: user._id },
+            { $set: { organizationId: sourceOrgId } }
+          );
+        }
+      }
+
+      // If token has orgId, it must match the user’s org to prevent token/org tampering.
+      if (
+        tokenOrgId &&
+        user.organizationId &&
+        user.organizationId.toString() !== tokenOrgId
+      ) {
+        return next(new AppError("Organization mismatch", 403, "ORG_MISMATCH"));
+      }
+
+      if (!user.organizationId && !user.isSuperAdmin) {
+        return next(new AppError("Organization context missing", 403, "ORG_REQUIRED"));
+      }
     }
 
     req.user = user;
@@ -46,15 +80,4 @@ export const protect = async (
   }
 };
 
-// 👑 Admin Only Middleware
-export const adminOnly = (
-  req: AuthRequest,
-  res: Response,
-  next: NextFunction
-) => {
-  if (req.user && req.user.role === "admin") {
-    next();
-  } else {
-    return res.status(403).json({ message: "Admin access required" });
-  }
-};
+export { adminOnly } from "./requireRole.middleware";

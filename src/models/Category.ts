@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface ICategory extends Document {
+  organizationId: mongoose.Types.ObjectId;
   name: string;
   slug: string;
   parent?: mongoose.Types.ObjectId | null;
@@ -10,6 +11,12 @@ export interface ICategory extends Document {
 
 const categorySchema = new Schema<ICategory>(
   {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
     name: {
       type: String,
       required: true,
@@ -18,7 +25,6 @@ const categorySchema = new Schema<ICategory>(
     slug: {
       type: String,
       required: true,
-      unique: true,
     },
     parent: {
       type: Schema.Types.ObjectId,
@@ -35,7 +41,8 @@ const categorySchema = new Schema<ICategory>(
 );
 
 // Subcategory lookups and tree building: find children by parent
-categorySchema.index({ parent: 1 });
+categorySchema.index({ organizationId: 1, parent: 1 });
+categorySchema.index({ organizationId: 1, slug: 1 }, { unique: true });
 
 const Category = mongoose.model<ICategory>("Category", categorySchema);
 

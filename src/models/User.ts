@@ -7,6 +7,12 @@ export interface IUser extends Document {
   phone?: string;
   password: string;
   role: "user" | "admin" | "delivery";
+  /** New RBAC relation (organization-scoped). Temporarily kept alongside legacy `role`. */
+  roleId?: mongoose.Types.ObjectId;
+  /** Set on every user after bootstrap; briefly unset only during first-user registration. */
+  organizationId?: mongoose.Types.ObjectId;
+  /** Platform operator; not tenant-scoped — use only for `/api/super-admin/*` and controlled bypasses. */
+  isSuperAdmin?: boolean;
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
 
@@ -26,6 +32,17 @@ const userSchema = new Schema<IUser>(
       enum: ["user", "admin", "delivery"],
       default: "user",
     },
+    roleId: {
+      type: Schema.Types.ObjectId,
+      ref: "Role",
+      index: true,
+    },
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      index: true,
+    },
+    isSuperAdmin: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );

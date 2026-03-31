@@ -2,17 +2,29 @@ import Cart from "../models/Cart";
 import Product from "../models/Product";
 import { AppError } from "../utils/AppError";
 import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
+import { tenantWhereClause } from "../utils/tenantScope";
 
-async function formatCartItems(cartItems: any[]) {
+async function formatCartItems(cartItems: any[], organizationId: string) {
   const formattedItems = await Promise.all(
     cartItems.map(async (item) => {
       try {
         let product = item.product;
-        const select = "name images variants pricingMode pricePerUnit baseUnit hasExpiry inventoryBatches";
+        const select =
+          "name images variants pricingMode pricePerUnit baseUnit hasExpiry inventoryBatches organizationId";
         if (typeof product === "string") {
-          product = await Product.findById(product).select(select).lean();
+          product = await Product.findOne({
+            _id: product,
+            ...tenantWhereClause(organizationId),
+          })
+            .select(select)
+            .lean();
         } else if (product) {
-          product = await Product.findById(product._id).select(select).lean();
+          product = await Product.findOne({
+            _id: product._id,
+            ...tenantWhereClause(organizationId),
+          })
+            .select(select)
+            .lean();
         }
         if (!product) return null;
 
@@ -22,20 +34,23 @@ async function formatCartItems(cartItems: any[]) {
         );
 
         const variantPrice = variant != null ? Number(variant.price) : NaN;
-        const variantOfferPrice = variant != null && variant.offerPrice != null ? Number(variant.offerPrice) : NaN;
-        const hasValidOffer = !Number.isNaN(variantOfferPrice) && variantOfferPrice > 0 && variantOfferPrice < variantPrice;
+        const variantOfferPrice =
+          variant != null && variant.offerPrice != null ? Number(variant.offerPrice) : NaN;
+        const hasValidOffer =
+          !Number.isNaN(variantOfferPrice) && variantOfferPrice > 0 && variantOfferPrice < variantPrice;
 
-        // For fixed pricing: use variant. Use original price when offer price is missing or zero.
         let price = variant
-          ? (hasValidOffer ? variantOfferPrice : (Number.isNaN(variantPrice) ? 0 : variantPrice))
-          : (Number(product.pricePerUnit) || 0);
+          ? hasValidOffer
+            ? variantOfferPrice
+            : Number.isNaN(variantPrice)
+              ? 0
+              : variantPrice
+          : Number(product.pricePerUnit) || 0;
 
-        // Fallback: if price is still 0 but we have a variant with price, use it (e.g. variant lookup edge case)
         if (price <= 0 && variant && variantPrice > 0) {
           price = variantPrice;
         }
 
-        // Apply Deal of the Day 5% discount if product qualifies (expiring in 2 days)
         const isDeal = qualifiesForDealOfTheDay(product);
         if (isDeal) {
           price = price * (1 - DEAL_DISCOUNT_PERCENT / 100);
@@ -65,25 +80,38 @@ async function formatCartItems(cartItems: any[]) {
   return formattedItems.filter((item) => item !== null);
 }
 
-export async function getCart(userId: string) {
-  const cart = await Cart.findOne({ user: userId }).populate(
-    "items.product",
-    "name images variants"
-  );
+export async function getCart(userId: string, organizationId: string) {
+  const cart = await Cart.findOne({
+    user: userId,
+    ...tenantWhereClause(organizationId),
+  }).populate("items.product", "name images variants");
   if (!cart) return { items: [], totalItems: 0 };
-  const formattedItems = await formatCartItems(cart.items);
+  const formattedItems = await formatCartItems(cart.items, organizationId);
   const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
   return { items: formattedItems, totalItems };
 }
 
 export async function addToCart(
   userId: string,
+  organizationId: string,
   data: { productId: string; variantId: string; quantity?: number }
 ) {
   const { productId, variantId, quantity = 1 } = data;
-  let cart = await Cart.findOne({ user: userId });
+  const productOk = await Product.exists({
+    _id: data.productId,
+    ...tenantWhereClause(organizationId),
+  });
+  if (!productOk) {
+    throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  }
+
+  let cart = await Cart.findOne({
+    user: userId,
+    ...tenantWhereClause(organizationId),
+  });
   if (!cart) {
     cart = new Cart({
+      organizationId,
       user: userId,
       items: [{ product: productId, variant: variantId, quantity }],
     });
@@ -100,14 +128,21 @@ export async function addToCart(
   }
   await cart.save();
   await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items);
+  const formattedItems = await formatCartItems(cart.items, organizationId);
   const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
   return { message: "Added to cart", totalItems, items: formattedItems };
 }
 
-export async function removeFromCart(userId: string, data: { productId: string; variantId: string }) {
+export async function removeFromCart(
+  userId: string,
+  organizationId: string,
+  data: { productId: string; variantId: string }
+) {
   const { productId, variantId } = data;
-  const cart = await Cart.findOne({ user: userId });
+  const cart = await Cart.findOne({
+    user: userId,
+    ...tenantWhereClause(organizationId),
+  });
   if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
 
   const removeIdx = cart.items.findIndex(
@@ -117,17 +152,21 @@ export async function removeFromCart(userId: string, data: { productId: string; 
   if (removeIdx !== -1) cart.items.splice(removeIdx, 1);
   await cart.save();
   await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items);
+  const formattedItems = await formatCartItems(cart.items, organizationId);
   const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
   return { message: "Item removed", totalItems, items: formattedItems };
 }
 
 export async function updateCartItem(
   userId: string,
+  organizationId: string,
   data: { productId: string; variantId: string; quantity: number }
 ) {
   const { productId, variantId, quantity } = data;
-  const cart = await Cart.findOne({ user: userId });
+  const cart = await Cart.findOne({
+    user: userId,
+    ...tenantWhereClause(organizationId),
+  });
   if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
 
   const itemIdx = cart.items.findIndex(
@@ -143,13 +182,16 @@ export async function updateCartItem(
   }
   await cart.save();
   await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items);
+  const formattedItems = await formatCartItems(cart.items, organizationId);
   const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
   return { message: "Cart updated", totalItems, items: formattedItems };
 }
 
-export async function clearCart(userId: string) {
-  const cart = await Cart.findOne({ user: userId });
+export async function clearCart(userId: string, organizationId: string) {
+  const cart = await Cart.findOne({
+    user: userId,
+    ...tenantWhereClause(organizationId),
+  });
   if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
   cart.items.splice(0, cart.items.length);
   await cart.save();

@@ -18,6 +18,7 @@ export const generalApiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+console.log(RATE_LIMIT_GENERAL_MAX, RATE_LIMIT_GENERAL_WINDOW_MS);
 /**
  * Stricter rate limiter for auth endpoints (login, register).
  * Protects against brute force and credential stuffing.

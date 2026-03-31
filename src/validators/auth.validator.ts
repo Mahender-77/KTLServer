@@ -11,12 +11,15 @@ const passwordSchema = z
   .min(6, "Password must be at least 6 characters")
   .max(128, "Password too long");
 
+/** Public signup: only user role; unknown fields (e.g. role) are rejected. */
 export const registerSchema = z.object({
-  body: z.object({
-    name: z.string().min(1, "Name is required").max(100, "Name too long").trim(),
-    email: emailSchema,
-    password: passwordSchema,
-  }),
+  body: z
+    .object({
+      name: z.string().min(1, "Name is required").max(100, "Name too long").trim(),
+      email: emailSchema,
+      password: passwordSchema,
+    })
+    .strict(),
 });
 
 export const loginSchema = z.object({

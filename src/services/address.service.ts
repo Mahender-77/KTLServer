@@ -1,20 +1,31 @@
 import Address from "../models/Address";
 import { AppError } from "../utils/AppError";
+import { ROLES } from "../constants/roles";
+import type { RequestActor } from "../types/access";
+import { assertOwnerOrAdmin } from "./resourceAccess";
+import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
 
-export async function getAddresses(userId: string) {
-  return Address.find({ user: userId }).sort({ isDefault: -1, createdAt: -1 });
+export async function getAddresses(actor: RequestActor) {
+  const base = tenantWhereClause(actor.organizationId);
+  const filter =
+    actor.role === ROLES.ADMIN ? base : { ...base, user: actor.userId };
+  return Address.find(filter).sort({ isDefault: -1, createdAt: -1 });
 }
 
-export async function createAddress(userId: string, data: any) {
+export async function createAddress(actor: RequestActor, data: any) {
   const { name, phone, address, city, pincode, landmark, isDefault } = data;
   if (!name || !phone || !address || !city || !pincode) {
     throw new AppError("All required fields must be provided", 400, "ADDRESS_FIELDS_REQUIRED");
   }
   if (isDefault) {
-    await Address.updateMany({ user: userId }, { $set: { isDefault: false } });
+    await Address.updateMany(
+      { user: actor.userId, ...tenantWhereClause(actor.organizationId) },
+      { $set: { isDefault: false } }
+    );
   }
   const newAddress = new Address({
-    user: userId,
+    organizationId: actor.organizationId,
+    user: actor.userId,
     name,
     phone,
     address,
@@ -27,12 +38,16 @@ export async function createAddress(userId: string, data: any) {
   return newAddress;
 }
 
-export async function updateAddress(userId: string, addressId: string, data: any) {
-  const addressDoc = await Address.findOne({ _id: addressId, user: userId });
+export async function updateAddress(actor: RequestActor, addressId: string, data: any) {
+  const addressDoc = await Address.findOne(
+    tenantScopedIdFilter(actor.organizationId, addressId)
+  );
   if (!addressDoc) throw new AppError("Address not found", 404, "ADDRESS_NOT_FOUND");
+  assertOwnerOrAdmin(actor, addressDoc.user.toString(), "ADDRESS_ACCESS_DENIED");
+  const ownerId = addressDoc.user.toString();
   if (data.isDefault) {
     await Address.updateMany(
-      { user: userId, _id: { $ne: addressId } },
+      { user: ownerId, _id: { $ne: addressId }, ...tenantWhereClause(actor.organizationId) },
       { $set: { isDefault: false } }
     );
   }
@@ -47,8 +62,10 @@ export async function updateAddress(userId: string, addressId: string, data: any
   return addressDoc;
 }
 
-export async function deleteAddress(userId: string, addressId: string) {
-  const address = await Address.findOneAndDelete({ _id: addressId, user: userId });
+export async function deleteAddress(actor: RequestActor, addressId: string) {
+  const address = await Address.findOne(tenantScopedIdFilter(actor.organizationId, addressId));
   if (!address) throw new AppError("Address not found", 404, "ADDRESS_NOT_FOUND");
+  assertOwnerOrAdmin(actor, address.user.toString(), "ADDRESS_ACCESS_DENIED");
+  await Address.deleteOne(tenantScopedIdFilter(actor.organizationId, addressId));
   return { message: "Address deleted successfully" };
 }

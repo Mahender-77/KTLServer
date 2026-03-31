@@ -1,6 +1,9 @@
 // server/routes/Order.routes.ts
 import express from "express";
 import { protect, adminOnly } from "../middlewares/auth.middleware";
+import { checkPermission } from "../middlewares/checkPermission.middleware";
+import { checkModule } from "../middlewares/checkModule.middleware";
+import { ORG_MODULES } from "../constants/modules";
 import {
   createOrder,
   getOrders,
@@ -16,12 +19,34 @@ import { idParamSchema } from "../validators/common";
 const router = express.Router();
 
 router.use(protect);
+router.use(checkModule(ORG_MODULES.ORDER));
 
-router.post("/", validate(createOrderSchema), asyncHandler(createOrder));
-router.get("/", asyncHandler(getOrders));
-router.get("/admin/all", adminOnly, asyncHandler(getOrdersForAdmin));
-router.get("/admin/:id", adminOnly, validate(idParamSchema), asyncHandler(getOrderByIdForAdmin));
-router.get("/:id", validate(idParamSchema), asyncHandler(getOrderById));
+router.post(
+  "/",
+  checkPermission("order.manage"),
+  validate(createOrderSchema),
+  asyncHandler(createOrder)
+);
+router.get("/", checkPermission("order.manage"), asyncHandler(getOrders));
+router.get(
+  "/admin/all",
+  adminOnly,
+  checkPermission("order.manage"),
+  asyncHandler(getOrdersForAdmin)
+);
+router.get(
+  "/admin/:id",
+  adminOnly,
+  checkPermission("order.manage"),
+  validate(idParamSchema),
+  asyncHandler(getOrderByIdForAdmin)
+);
+router.get(
+  "/:id",
+  checkPermission("order.manage"),
+  validate(idParamSchema),
+  asyncHandler(getOrderById)
+);
 
 export default router;
 

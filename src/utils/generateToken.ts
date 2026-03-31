@@ -1,24 +1,53 @@
 import jwt from "jsonwebtoken";
+import { getJwtAccessSecret, getJwtRefreshSecret } from "../config/env";
 
 const ACCESS_EXPIRY = "15m";
 const REFRESH_EXPIRY = "7d";
 
-export const generateAccessToken = (userId: string): string => {
-  return jwt.sign(
-    { id: userId },
-    process.env.JWT_SECRET as string,
-    { expiresIn: ACCESS_EXPIRY }
-  );
+export type TokenOptions = {
+  /** Platform super-admin (optional org in token). */
+  isSuperAdmin?: boolean;
 };
 
-export const generateRefreshToken = (userId: string): string => {
-  return jwt.sign(
-    { id: userId },
-    process.env.JWT_REFRESH_SECRET as string,
-    { expiresIn: REFRESH_EXPIRY }
-  );
+function buildPayload(
+  userId: string,
+  organizationId?: string | null,
+  options?: TokenOptions
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { id: userId };
+  if (organizationId) payload.organizationId = organizationId;
+  if (options?.isSuperAdmin) payload.isSuperAdmin = true;
+  return payload;
+}
+
+export const generateAccessToken = (
+  userId: string,
+  organizationId?: string | null,
+  options?: TokenOptions
+): string => {
+  return jwt.sign(buildPayload(userId, organizationId, options), getJwtAccessSecret(), {
+    expiresIn: ACCESS_EXPIRY,
+  });
 };
 
-export const verifyRefreshToken = (token: string): { id: string } => {
-  return jwt.verify(token, process.env.JWT_REFRESH_SECRET as string) as { id: string };
+export const generateRefreshToken = (
+  userId: string,
+  organizationId?: string | null,
+  options?: TokenOptions
+): string => {
+  return jwt.sign(buildPayload(userId, organizationId, options), getJwtRefreshSecret(), {
+    expiresIn: REFRESH_EXPIRY,
+  });
+};
+
+export const verifyRefreshToken = (token: string): {
+  id: string;
+  organizationId?: string;
+  isSuperAdmin?: boolean;
+} => {
+  return jwt.verify(token, getJwtRefreshSecret()) as {
+    id: string;
+    organizationId?: string;
+    isSuperAdmin?: boolean;
+  };
 };

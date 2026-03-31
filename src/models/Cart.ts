@@ -9,10 +9,18 @@ const cartItemSchema = new mongoose.Schema({
 
 const cartSchema = new mongoose.Schema(
   {
-    user:  { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
+    user:  { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     items: [cartItemSchema],
   },
   { timestamps: true }
 );
+
+cartSchema.index({ organizationId: 1, user: 1 }, { unique: true });
 
 export default mongoose.model("Cart", cartSchema);

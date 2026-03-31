@@ -1,8 +1,12 @@
 import Product from "../models/Product";
+import Store from "../models/Store";
+import Category from "../models/Category";
 import slugify from "slugify";
 import mongoose from "mongoose";
 import { paginated, PaginatedResponse } from "../utils/pagination";
 import { AppError } from "../utils/AppError";
+import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
+import { tenantFilterFromActor } from "../utils/tenantFilter";
 
 const now = () => new Date();
 
@@ -25,9 +29,13 @@ function extractId(val: any): string {
 export async function getAvailableStock(
   productId: string,
   variantId: string,
-  storeId: string
+  storeId: string,
+  organizationId: string
 ): Promise<number> {
-  const product = await Product.findById(productId)
+  const product = await Product.findOne({
+    _id: productId,
+    ...tenantWhereClause(organizationId),
+  })
     .select("inventoryBatches hasExpiry")
     .lean();
   if (!product?.inventoryBatches?.length) return 0;
@@ -195,22 +203,26 @@ function formatProductForListing(p: any) {
 
 // ─── createProduct ────────────────────────────────────────────────────────────
 
-export async function createProduct(data: {
-  name: string;
-  description?: string;
-  category: string;
-  pricingMode?: "fixed" | "custom-weight" | "unit";
-  baseUnit: "kg" | "g" | "ml" | "l" | "pcs";
-  pricePerUnit: number;
-  hasExpiry?: boolean;
-  variants?: any[];
-  imageUrl?: string | null;
-  shelfLifeDays?: number | null;
-  tags?: string[];
-  taxRate?: number;
-  minOrderQty?: number;
-  maxOrderQty?: number;
-}) {
+export async function createProduct(
+  data: {
+    name: string;
+    description?: string;
+    category: string;
+    store?: string;
+    pricingMode?: "fixed" | "custom-weight" | "unit";
+    baseUnit: "kg" | "g" | "ml" | "l" | "pcs";
+    pricePerUnit: number;
+    hasExpiry?: boolean;
+    variants?: any[];
+    imageUrl?: string | null;
+    shelfLifeDays?: number | null;
+    tags?: string[];
+    taxRate?: number;
+    minOrderQty?: number;
+    maxOrderQty?: number;
+  },
+  organizationId: string
+) {
   const {
     name, description, category,
     pricingMode = "unit",
@@ -222,6 +234,26 @@ export async function createProduct(data: {
 
   if (!name || !category) {
     throw new AppError("Missing required fields", 400, "MISSING_FIELDS");
+  }
+  const categoryDoc = await Category.findOne({
+    _id: category,
+    ...tenantWhereClause(organizationId),
+  })
+    .select("_id organizationId")
+    .lean();
+  if (!categoryDoc) {
+    throw new AppError("Invalid category", 400, "INVALID_CATEGORY");
+  }
+  if (data.store) {
+    const storeDoc = await Store.findOne({
+      _id: data.store,
+      ...tenantWhereClause(organizationId),
+    })
+      .select("_id organizationId")
+      .lean();
+    if (!storeDoc) {
+      throw new AppError("Invalid store", 400, "INVALID_STORE");
+    }
   }
   if (baseUnit == null || pricePerUnit == null) {
     throw new AppError("baseUnit and pricePerUnit are required", 400, "MISSING_FIELDS");
@@ -236,12 +268,18 @@ export async function createProduct(data: {
   }
 
   let slug = slugify(name, { lower: true, strict: true });
-  const exists = await Product.findOne({ slug }).select("_id").lean();
+  const exists = await Product.findOne({
+    slug,
+    ...tenantWhereClause(organizationId),
+  })
+    .select("_id")
+    .lean();
   if (exists) slug = `${slug}-${Date.now().toString(36)}`;
 
   // All fields explicitly set — no relying on schema defaults
   const productData: Record<string, unknown> = {
     name,
+    organizationId,
     slug,
     category,
     pricingMode,
@@ -273,9 +311,14 @@ export async function getProducts(params: {
   page: number;
   limit: number;
   skip: number;
+  organizationId: string;
+  isSuperAdmin?: boolean;
 }): Promise<PaginatedResponse<any>> {
-  const { category, page, limit, skip } = params;
-  const filter: any = {};
+  const { category, page, limit, skip, organizationId } = params;
+  const filter: Record<string, unknown> = tenantFilterFromActor({
+    organizationId,
+    isSuperAdmin: false,
+  });
   if (category) filter.category = category;
 
   const [products, total] = await Promise.all([
@@ -311,9 +354,10 @@ export async function updateProduct(
     minOrderQty?: number | null;
     maxOrderQty?: number | null;
     isActive?: boolean;
-  }
+  },
+  organizationId: string
 ) {
-  const product = await Product.findById(id);
+  const product = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) });
   if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
 
   const {
@@ -324,7 +368,18 @@ export async function updateProduct(
 
   if (name != null) product.name = name;
   if (description !== undefined) product.description = description || undefined;
-  if (category != null) product.category = category as any;
+  if (category != null) {
+    const categoryDoc = await Category.findOne({
+      _id: category,
+      ...tenantWhereClause(organizationId),
+    })
+      .select("_id")
+      .lean();
+    if (!categoryDoc) {
+      throw new AppError("Invalid category", 400, "INVALID_CATEGORY");
+    }
+    product.category = category as any;
+  }
   if (pricingMode != null) product.pricingMode = pricingMode;
   if (baseUnit != null) product.baseUnit = baseUnit;
   if (pricePerUnit != null) product.pricePerUnit = pricePerUnit;
@@ -347,7 +402,13 @@ export async function updateProduct(
 
   if (name != null && name.trim()) {
     let slug = slugify(name, { lower: true, strict: true });
-    const exists = await Product.findOne({ slug, _id: { $ne: id } }).select("_id").lean();
+    const exists = await Product.findOne({
+      slug,
+      _id: { $ne: id },
+      ...tenantWhereClause(organizationId),
+    })
+      .select("_id")
+      .lean();
     if (exists) slug = `${slug}-${Date.now().toString(36)}`;
     product.slug = slug;
   }
@@ -360,17 +421,21 @@ export async function updateProduct(
   }
 
   await product.save();
-  const updated = await Product.findById(id).populate("category", "name slug").lean();
+  const updated = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) })
+    .populate("category", "name slug")
+    .lean();
   if (!updated) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
   return formatProductForListing(updated);
 }
 
 // ─── deleteProduct ────────────────────────────────────────────────────────────
 
-export async function deleteProduct(id: string) {
-  const product = await Product.findById(id).select("_id").lean();
+export async function deleteProduct(id: string, organizationId: string) {
+  const product = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) })
+    .select("_id")
+    .lean();
   if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
-  await Product.findByIdAndDelete(id);
+  await Product.deleteOne({ _id: id, ...tenantWhereClause(organizationId) });
   return { message: "Product deleted" };
 }
 
@@ -381,13 +446,15 @@ export async function getPublicProducts(params: {
   page: number;
   limit: number;
   skip: number;
+  organizationId: string;
 }): Promise<PaginatedResponse<any>> {
-  const { category, page, limit, skip } = params;
+  const { category, page, limit, skip, organizationId } = params;
 
-  const filter: any = {
+  const filter: Record<string, unknown> = {
     isActive: true,
     "inventoryBatches.quantity": { $gt: 0 },
   };
+  Object.assign(filter, tenantWhereClause(organizationId));
   if (category) filter.category = category;
 
   const [rawProducts, total] = await Promise.all([
@@ -410,8 +477,8 @@ export async function getPublicProducts(params: {
 
 // ─── getProductById (public) ──────────────────────────────────────────────────
 
-export async function getProductById(id: string) {
-  const product = await Product.findById(id)
+export async function getProductById(id: string, organizationId: string) {
+  const product = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) })
     .populate("category", "name slug")
     .lean();
 
@@ -423,8 +490,11 @@ export async function getProductById(id: string) {
 
 // ─── getProductByIdForAdmin ───────────────────────────────────────────────────
 
-export async function getProductByIdForAdmin(id: string) {
-  const product = await Product.findById(id)
+export async function getProductByIdForAdmin(
+  id: string,
+  organizationId: string
+) {
+  const product = await Product.findOne(tenantScopedIdFilter(organizationId, id))
     .populate("category", "name slug")
     .populate({ path: "inventoryBatches.store", select: "name" })
     .lean();
@@ -445,11 +515,16 @@ export type AddBatchInput = {
   costPrice?: number;
 };
 
-export async function addBatch(productId: string, data: AddBatchInput) {
-  const product = await Product.findById(productId)
+export async function addBatch(productId: string, data: AddBatchInput, organizationId: string) {
+  const product = await Product.findOne({ _id: productId, ...tenantWhereClause(organizationId) })
     .select("pricingMode hasExpiry inventoryBatches baseUnit")
     .lean();
   if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+
+  const store = await Store.findOne({ _id: data.store, ...tenantWhereClause(organizationId) })
+    .select("_id")
+    .lean();
+  if (!store) throw new AppError("Store not found", 404, "STORE_NOT_FOUND");
 
   const pricingMode = (product as any).pricingMode ?? "unit";
   const hasExpiry   = (product as any).hasExpiry === true;
@@ -507,11 +582,14 @@ export async function addBatch(productId: string, data: AddBatchInput) {
     ...(data.costPrice != null && { costPrice:         data.costPrice }),
   };
 
-  await Product.findByIdAndUpdate(productId, {
-    $push: { inventoryBatches: newBatch },
-  });
+  await Product.findOneAndUpdate(
+    { _id: productId, ...tenantWhereClause(organizationId) },
+    {
+      $push: { inventoryBatches: newBatch },
+    }
+  );
 
-  const updated = await Product.findById(productId)
+  const updated = await Product.findOne({ _id: productId, ...tenantWhereClause(organizationId) })
     .select("name _id inventoryBatches")
     .lean();
 
@@ -541,8 +619,9 @@ export async function getExpiringBatches(params: {
   page: number;
   limit: number;
   skip: number;
+  organizationId: string;
 }): Promise<PaginatedResponse<ExpiringBatchRow>> {
-  const { days, page, limit, skip } = params;
+  const { days, page, limit, skip, organizationId } = params;
   const start   = now();
   const endDate = new Date(
     start.getTime() +
@@ -552,6 +631,7 @@ export async function getExpiringBatches(params: {
   const pipeline: mongoose.PipelineStage[] = [
     {
       $match: {
+        ...tenantWhereClause(organizationId),
         "inventoryBatches.0": { $exists: true },
         "inventoryBatches.expiryDate": { $gte: start, $lte: endDate },
       },
@@ -637,20 +717,21 @@ export function qualifiesForDealOfTheDay(productDoc: {
 }
 
 /** Products with inventory expiring within DEAL_EXPIRING_DAYS days — for Deal of the Day */
-export async function getDealOfTheDay(params?: { limit?: number }) {
+export async function getDealOfTheDay(params: { limit?: number; organizationId: string }) {
   const limit = Math.min(Math.max(params?.limit ?? 20, 1), 50);
   const start = now();
   const endDate = new Date(
     start.getTime() + DEAL_EXPIRING_DAYS * 24 * 60 * 60 * 1000
   );
 
-  const filter: any = {
+  const filter: Record<string, unknown> = {
     isActive: true,
     hasExpiry: true,
     "inventoryBatches.0": { $exists: true },
     "inventoryBatches.expiryDate": { $gte: start, $lte: endDate },
     "inventoryBatches.quantity": { $gt: 0 },
   };
+  Object.assign(filter, tenantWhereClause(params.organizationId));
 
   const products = await Product.find(filter)
     .populate("category", "name slug")
