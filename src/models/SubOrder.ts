@@ -8,6 +8,7 @@ export interface ISubOrderItem {
 }
 
 export interface ISubOrder extends Document {
+  organizationId: mongoose.Types.ObjectId;
   order: mongoose.Types.ObjectId;
   category: mongoose.Types.ObjectId;
   categoryName: string;
@@ -48,6 +49,12 @@ const subOrderItemSchema = new Schema<ISubOrderItem>({
 
 const subOrderSchema = new Schema<ISubOrder>(
   {
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
     order: {
       type: Schema.Types.ObjectId,
       ref: "Order",
@@ -91,8 +98,8 @@ const subOrderSchema = new Schema<ISubOrder>(
 );
 
 // Compound index for efficient queries
-subOrderSchema.index({ order: 1, category: 1 });
-subOrderSchema.index({ deliveryStatus: 1, deliveryBoyId: 1 });
+subOrderSchema.index({ organizationId: 1, order: 1, category: 1 });
+subOrderSchema.index({ organizationId: 1, deliveryStatus: 1, deliveryBoyId: 1 });
 
 export default mongoose.model<ISubOrder>("SubOrder", subOrderSchema);
 

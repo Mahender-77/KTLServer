@@ -25,6 +25,12 @@ const orderItemSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema(
   {
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -54,9 +60,27 @@ const orderSchema = new mongoose.Schema(
 
     deliveryStatus: {
       type: String,
-      enum: ["assigned", "accepted", "in-transit", "delivered"],
+      enum: ["pending", "assigned", "accepted", "in-transit", "out_for_delivery", "delivered"],
+      default: "pending",
+    },
+
+    deliveryBoy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       default: null,
     },
+    rejectedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    acceptedAt: { type: Date, default: null },
+    pickedUpAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
+    otp: { type: String, default: null, select: false },
+    otpExpiry: { type: Date, default: null },
+    otpAttempts: { type: Number, default: 0 },
 
     deliveryPersonLocation: {
       latitude: { type: Number, default: null },
@@ -80,6 +104,6 @@ const orderSchema = new mongoose.Schema(
 );
 
 // List orders by user, newest first (GET /api/orders paginated)
-orderSchema.index({ user: 1, createdAt: -1 });
+orderSchema.index({ organizationId: 1, user: 1, createdAt: -1 });
 
 export default mongoose.model("Order", orderSchema);

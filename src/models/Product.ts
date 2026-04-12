@@ -45,6 +45,7 @@ export type BaseUnit = "kg" | "g" | "ml" | "l" | "pcs";
 
 export interface IProduct extends Document {
   name: string;
+  organizationId: mongoose.Types.ObjectId;
   slug: string;
   description?: string;
   category: mongoose.Types.ObjectId;
@@ -158,9 +159,14 @@ const productSchema = new Schema<IProduct>(
       required: true,
       trim: true,
     },
+    organizationId: {
+      type: Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
     slug: {
       type: String,
-      unique: true,
       trim: true,
     },
     description: {
@@ -271,14 +277,17 @@ productSchema.pre("save", async function () {
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 
+// Slug unique per organization
+productSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
+
 // Product list: filter by active + category
-productSchema.index({ isActive: 1, category: 1 });
+productSchema.index({ organizationId: 1, isActive: 1, category: 1 });
 
 // Product list: active only (no category filter)
-productSchema.index({ isActive: 1 });
+productSchema.index({ organizationId: 1, isActive: 1 });
 
-// Tag-based search / filtering
-productSchema.index({ tags: 1 });
+// Tag-based search / filtering (tenant-scoped lists)
+productSchema.index({ organizationId: 1, tags: 1 });
 
 // FEFO / expiry alert queries
 productSchema.index({ "inventoryBatches.expiryDate": 1 });

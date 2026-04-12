@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import rateLimit from "express-rate-limit";
 import {
   RATE_LIMIT_GENERAL_MAX,
@@ -18,6 +19,8 @@ export const generalApiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// logger.log is typed as (msg: string, ...meta: any[]). Coerce the first argument to string.
+logger.log(String(RATE_LIMIT_GENERAL_MAX), RATE_LIMIT_GENERAL_WINDOW_MS);
 /**
  * Stricter rate limiter for auth endpoints (login, register).
  * Protects against brute force and credential stuffing.

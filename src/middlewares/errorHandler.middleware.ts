@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../utils/AppError";
 
@@ -48,9 +49,9 @@ export function errorHandler(
   };
 
   if (statusCode >= 500) {
-    console.error("[Error]", logContext, err.stack);
+    logger.error("[Error]", logContext, err.stack);
   } else {
-    console.warn("[Error]", logContext);
+    logger.warn("[Error]", logContext);
   }
 
   if (res.headersSent) {

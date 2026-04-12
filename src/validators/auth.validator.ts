@@ -11,12 +11,15 @@ const passwordSchema = z
   .min(6, "Password must be at least 6 characters")
   .max(128, "Password too long");
 
+/** Public signup: only user role; unknown fields (e.g. role) are rejected. */
 export const registerSchema = z.object({
-  body: z.object({
-    name: z.string().min(1, "Name is required").max(100, "Name too long").trim(),
-    email: emailSchema,
-    password: passwordSchema,
-  }),
+  body: z
+    .object({
+      name: z.string().min(1, "Name is required").max(100, "Name too long").trim(),
+      email: emailSchema,
+      password: passwordSchema,
+    })
+    .strict(),
 });
 
 export const loginSchema = z.object({
@@ -35,6 +38,29 @@ export const refreshSchema = z.object({
 export const logoutSchema = z.object({
   body: z.object({
     refreshToken: z.string().optional(),
+  }),
+});
+
+export const changePasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(1, "Current password is required"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm password is required"),
+  }),
+});
+
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: emailSchema,
+  }),
+});
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    email: emailSchema,
+    token: z.string().min(1, "Reset token is required"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm password is required"),
   }),
 });
 

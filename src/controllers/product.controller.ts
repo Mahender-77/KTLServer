@@ -1,7 +1,12 @@
+import { logger } from '../utils/logger';
 import { Request, Response } from "express";
-import { getPaginationParams } from "../utils/pagination";
+import { getPaginationParams, paginated } from "../utils/pagination";
 import * as productService from "../services/product.service";
 import { AppError } from "../utils/AppError";
+import type { AuthRequest } from "../middlewares/auth.middleware";
+import { requestActor } from "../utils/requestActor";
+import { resolvePublicCatalogScope, resolvePublicOrganizationId } from "../utils/tenantScope";
+import { appendAuditLogSafe } from "../services/auditLog.service";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,8 +55,16 @@ function parseDays(query: string | undefined): number {
 
 // ─── Controllers ──────────────────────────────────────────────────────────────
 
-export const createProduct = async (req: Request, res: Response) => {
+export const createProduct = async (req: AuthRequest, res: Response) => {
   if (!req.body) throw new AppError("Invalid request body", 400, "INVALID_BODY");
+  const orgId = req.user?.organizationId?.toString?.();
+  if (!orgId && !req.user?.isSuperAdmin) {
+    throw new AppError("Organization required", 403, "ORG_REQUIRED");
+  }
+  if (!orgId) {
+    throw new AppError("Organization required", 403, "ORG_REQUIRED");
+  }
+  req.body.organizationId = orgId;
 
   const pricingMode = (
     ["fixed", "custom-weight", "unit"] as const
@@ -82,39 +95,75 @@ export const createProduct = async (req: Request, res: Response) => {
   const hasExpiry    = coerceBool(req.body.hasExpiry);
   const baseUnit     = req.body.baseUnit as "kg" | "g" | "ml" | "l" | "pcs";
 
-  const product = await productService.createProduct({
-    name:         req.body.name,
-    description:  req.body.description,
-    category:     req.body.category,
-    pricingMode,
-    baseUnit,
-    pricePerUnit: pricePerUnit!,
-    hasExpiry,
-    variants,
-    imageUrl,
-    shelfLifeDays,
-    tags,
-    taxRate,
-    minOrderQty,
-    maxOrderQty,
+  const product = await productService.createProduct(
+    {
+      name: req.body.name,
+      description: req.body.description,
+      category: req.body.category,
+      store: req.body.store,
+      pricingMode,
+      baseUnit,
+      pricePerUnit: pricePerUnit!,
+      hasExpiry,
+      variants,
+      imageUrl,
+      shelfLifeDays,
+      tags,
+      taxRate,
+      minOrderQty,
+      maxOrderQty,
+    },
+    orgId
+  );
+
+  await appendAuditLogSafe({
+    organizationId: orgId,
+    userId: req.user!._id.toString(),
+    action: "product.created",
+    metadata: { productId: String(product._id), name: product.name },
   });
 
   res.status(201).json(product);
 };
 
-export const getProducts = async (req: Request, res: Response) => {
+export const getProducts = async (req: AuthRequest, res: Response) => {
+  const actor = requestActor(req);
   const { page, limit, skip } = getPaginationParams(req);
   const category = req.query.category as string | undefined;
-  const result = await productService.getProducts({ category, page, limit, skip });
+  const result = await productService.getProducts({
+    category,
+    page,
+    limit,
+    skip,
+    organizationId: actor.organizationId,
+  });
   res.json(result);
 };
 
 export const getPublicProducts = async (req: Request, res: Response) => {
   // Debug: if you don't see this in your backend terminal, the request is NOT reaching this server
-  console.log("[getPublicProducts] Request received — backend is being hit");
+  logger.log("[getPublicProducts] Request received — backend is being hit");
   const { page, limit, skip } = getPaginationParams(req);
   const category = req.query.category as string | undefined;
-  const result = await productService.getPublicProducts({ category, page, limit, skip });
+  const scope = await resolvePublicCatalogScope(req);
+  const result =
+    scope.mode === "single"
+      ? await productService.getPublicProducts({
+          category,
+          page,
+          limit,
+          skip,
+          organizationId: scope.organizationId,
+        })
+      : scope.organizationIds.length === 0
+        ? paginated([], 0, page, limit)
+        : await productService.getPublicProducts({
+            category,
+            page,
+            limit,
+            skip,
+            organizationIds: scope.organizationIds,
+          });
   // Ensure every product has _id and images (never omitted by JSON serialization)
   const normalizedData = (result.data || []).map((p: any) => ({
     _id:              p._id ?? p.id ?? "",
@@ -151,23 +200,39 @@ export const getPublicProducts = async (req: Request, res: Response) => {
 
 export const getProductById = async (req: Request, res: Response) => {
   const id = paramId(req.params.id);
-  const product = await productService.getProductById(id);
+  const scope = await resolvePublicCatalogScope(req);
+  if (scope.mode === "marketplace" && scope.organizationIds.length === 0) {
+    throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  }
+  const product =
+    scope.mode === "single"
+      ? await productService.getProductById(id, scope.organizationId)
+      : await productService.getProductByIdMarketplace(id, scope.organizationIds);
   res.status(200).json(product);
 };
 
-export const getProductByIdForAdmin = async (req: Request, res: Response) => {
+export const getProductByIdForAdmin = async (req: AuthRequest, res: Response) => {
+  const actor = requestActor(req);
   const id = paramId(req.params.id);
-  const product = await productService.getProductByIdForAdmin(id);
+  const product = await productService.getProductByIdForAdmin(id, actor.organizationId);
   res.status(200).json(product);
 };
 
-export const deleteProduct = async (req: Request, res: Response) => {
+export const deleteProduct = async (req: AuthRequest, res: Response) => {
+  const { organizationId } = requestActor(req);
   const id = paramId(req.params.id);
-  const result = await productService.deleteProduct(id);
+  const result = await productService.deleteProduct(id, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "product.deleted",
+    metadata: { productId: id },
+  });
   res.json(result);
 };
 
-export const updateProduct = async (req: Request, res: Response) => {
+export const updateProduct = async (req: AuthRequest, res: Response) => {
+  const { organizationId } = requestActor(req);
   const id = paramId(req.params.id);
   if (!id) throw new AppError("Product ID is required", 400, "INVALID_ID");
 
@@ -203,25 +268,49 @@ export const updateProduct = async (req: Request, res: Response) => {
   if (body.maxOrderQty !== undefined) updateData.maxOrderQty = coerceNumber(body.maxOrderQty) ?? null;
   if (body.isActive !== undefined) updateData.isActive = coerceBool(body.isActive);
 
-  const product = await productService.updateProduct(id, updateData);
+  const product = await productService.updateProduct(id, updateData, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "product.updated",
+    metadata: { productId: id },
+  });
   res.status(200).json(product);
 };
 
-export const addBatch = async (req: Request, res: Response) => {
+export const addBatch = async (req: AuthRequest, res: Response) => {
+  const { organizationId } = requestActor(req);
   const id = paramId(req.params.id);
-  const result = await productService.addBatch(id, req.body);
+  const result = await productService.addBatch(id, req.body, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "inventory.batch_added",
+    metadata: { productId: id },
+  });
   res.status(201).json(result);
 };
 
-export const getExpiringBatches = async (req: Request, res: Response) => {
+export const getExpiringBatches = async (req: AuthRequest, res: Response) => {
+  const { organizationId } = requestActor(req);
   const days = parseDays(req.query.days as string | undefined);
   const { page, limit, skip } = getPaginationParams(req);
-  const result = await productService.getExpiringBatches({ days, page, limit, skip });
+  const result = await productService.getExpiringBatches({
+    days,
+    page,
+    limit,
+    skip,
+    organizationId,
+  });
   res.json(result);
 };
 
 export const getDealOfTheDay = async (req: Request, res: Response) => {
   const limit = Math.min(parseInt(String(req.query.limit || 20), 10) || 20, 50);
-  const result = await productService.getDealOfTheDay({ limit });
+  const organizationId = await resolvePublicOrganizationId(req);
+  if (!organizationId) {
+    return res.json({ data: [] });
+  }
+  const result = await productService.getDealOfTheDay({ limit, organizationId });
   res.json(result);
 };

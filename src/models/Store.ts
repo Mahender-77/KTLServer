@@ -2,6 +2,12 @@ import mongoose from "mongoose";
 
 const storeSchema = new mongoose.Schema(
   {
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+      index: true,
+    },
     name: { type: String, required: true },
     address: String,
     city: String,
@@ -16,6 +22,6 @@ const storeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-storeSchema.index({ createdAt: -1 });
+storeSchema.index({ organizationId: 1, createdAt: -1 });
 
 export default mongoose.model("Store", storeSchema);
