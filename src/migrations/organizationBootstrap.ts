@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import mongoose from "mongoose";
 import Organization from "../models/Organization";
 import User from "../models/User";
@@ -11,7 +12,7 @@ import SubOrder from "../models/SubOrder";
 import Category from "../models/Category";
 import Role from "../models/Role";
 import { ROLES } from "../constants/roles";
-import { DEFAULT_ORG_MODULES } from "../constants/modules";
+import { DEFAULT_ORG_MODULES, ORG_MODULES } from "../constants/modules";
 import { DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields";
 
 /** Single shared tenant for legacy data and default signups until multi-org onboarding is added. */
@@ -35,6 +36,11 @@ export const RBAC_PERMISSIONS = [
   "product.update",
   "order.manage",
   "user.create",
+  "inventory.view",
+  "inventory.update",
+  "audit.view",
+  "category.manage",
+  "store.manage",
 ] as const;
 
 export const DEFAULT_ROLE_DEFINITIONS: Array<{
@@ -93,6 +99,16 @@ export async function bootstrapTenantData(): Promise<void> {
   await Organization.updateMany(
     { $or: [{ productFieldConfig: { $exists: false } }, { productFieldConfig: null }] },
     { $set: { productFieldConfig: { ...DEFAULT_PRODUCT_FIELD_CONFIG } } }
+  );
+
+  // Phase 4: enable inventory + category + store modules for orgs that already have the product module.
+  await Organization.updateMany(
+    { modules: ORG_MODULES.PRODUCT },
+    {
+      $addToSet: {
+        modules: { $each: [ORG_MODULES.INVENTORY, ORG_MODULES.CATEGORY, ORG_MODULES.STORE] },
+      },
+    }
   );
 
   let org = await Organization.findOne({ name: DEFAULT_ORG_NAME });
@@ -164,16 +180,16 @@ export async function bootstrapTenantData(): Promise<void> {
     if (anyOrg?._id) {
       defaultOrgIdCache = anyOrg._id.toString();
     } else {
-      console.warn(
+      logger.warn(
         "[tenant] No organization in database yet — public catalog routes return empty until the first account is registered."
       );
     }
   }
 
-  await Product.syncIndexes().catch((e) => console.warn("[tenant] Product.syncIndexes:", e));
-  await Category.syncIndexes().catch((e) => console.warn("[tenant] Category.syncIndexes:", e));
-  await Cart.syncIndexes().catch((e) => console.warn("[tenant] Cart.syncIndexes:", e));
-  await Wishlist.syncIndexes().catch((e) => console.warn("[tenant] Wishlist.syncIndexes:", e));
+  await Product.syncIndexes().catch((e) => logger.warn("[tenant] Product.syncIndexes:", e));
+  await Category.syncIndexes().catch((e) => logger.warn("[tenant] Category.syncIndexes:", e));
+  await Cart.syncIndexes().catch((e) => logger.warn("[tenant] Cart.syncIndexes:", e));
+  await Wishlist.syncIndexes().catch((e) => logger.warn("[tenant] Wishlist.syncIndexes:", e));
 }
 
 /**

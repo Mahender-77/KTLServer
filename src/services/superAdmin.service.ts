@@ -8,6 +8,7 @@ import { AppError } from "../utils/AppError";
 import type { OrgModuleKey } from "../constants/modules";
 import type { ProductFieldConfig, ProductFieldKey } from "../constants/productFields";
 import { PRODUCT_FIELD_KEYS, DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields";
+import { invalidateProductFieldConfigCache } from "../utils/productFieldConfig";
 import { ROLES } from "../constants/roles";
 import { ensureDefaultRolesForOrganization } from "../migrations/organizationBootstrap";
 import { logSuperAdminAction } from "../utils/superAdminAudit";
@@ -48,6 +49,69 @@ export async function listOrganizations(params: { page: number; limit: number })
     page: params.page,
     limit: params.limit,
     totalPages,
+  };
+}
+
+function mapPublicContact(u: {
+  _id: unknown;
+  name: string;
+  email: string;
+  phone?: string | null;
+  isSuspended?: boolean;
+  createdAt?: Date;
+}) {
+  return {
+    _id: String(u._id),
+    name: u.name,
+    email: u.email,
+    phone: u.phone ?? null,
+    isSuspended: u.isSuspended === true,
+    createdAt: u.createdAt ?? null,
+  };
+}
+
+export async function getOrganizationById(organizationId: string) {
+  if (!mongoose.isValidObjectId(organizationId)) {
+    throw new AppError("Invalid organization id", 400, "INVALID_ID");
+  }
+  const o = await Organization.findById(organizationId)
+    .select(
+      "_id name isActive modules owner planId subscriptionStatus subscriptionStartDate subscriptionEndDate createdAt updatedAt productFieldConfig"
+    )
+    .lean();
+  if (!o) throw new AppError("Organization not found", 404, "ORG_NOT_FOUND");
+
+  const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
+  const [ownerDoc, adminDocs] = await Promise.all([
+    o.owner
+      ? User.findById(o.owner).select("name email phone isSuspended createdAt").lean()
+      : Promise.resolve(null),
+    User.find({
+      organizationId: orgObjectId,
+      role: ROLES.ADMIN,
+      isSuperAdmin: { $ne: true },
+    })
+      .select("name email phone isSuspended createdAt")
+      .sort({ createdAt: 1 })
+      .lean(),
+  ]);
+
+  return {
+    _id: o._id,
+    name: o.name,
+    isActive: o.isActive,
+    modules: Array.isArray(o.modules) ? o.modules : [],
+    ownerId: o.owner ? String(o.owner) : null,
+    owner: ownerDoc ? mapPublicContact(ownerDoc) : null,
+    clientAdmins: adminDocs.map((u) => mapPublicContact(u)),
+    planId: o.planId ? String(o.planId) : null,
+    subscriptionStatus: o.subscriptionStatus ?? SUBSCRIPTION_STATUS.TRIAL,
+    subscriptionStartDate: o.subscriptionStartDate ?? null,
+    subscriptionEndDate: o.subscriptionEndDate ?? null,
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt,
+    productFieldConfig: o.productFieldConfig ?? null,
   };
 }
 
@@ -330,6 +394,7 @@ export async function createOrganizationFull(
     await session.commitTransaction();
 
     const organizationId = org._id.toString();
+    invalidateProductFieldConfigCache(organizationId);
     await ensureDefaultRolesForOrganization(organizationId);
     const adminRole = await Role.findOne({
       organizationId,

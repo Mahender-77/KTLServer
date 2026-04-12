@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import mongoose from "mongoose";
 import { getMongoUri } from "./env";
 import { bootstrapTenantData } from "../migrations/organizationBootstrap";
@@ -8,15 +9,15 @@ export const connectDB = async (): Promise<void> => {
     const uri = getMongoUri();
     const conn = await mongoose.connect(uri);
 
-    console.log("🟢 MongoDB Connected Successfully");
-    console.log(`📦 Database: ${conn.connection.name}`);
-    console.log(`🌍 Host: ${conn.connection.host}`);
+    logger.log("🟢 MongoDB Connected Successfully");
+    logger.log(`📦 Database: ${conn.connection.name}`);
+    logger.log(`🌍 Host: ${conn.connection.host}`);
 
     await bootstrapTenantData();
     await bootstrapSuperAdminUsers();
   } catch (error) {
-    console.error("🔴 MongoDB Connection Failed");
-    console.error(error);
+    logger.error("🔴 MongoDB Connection Failed");
+    logger.error("DB error details", error);
     process.exit(1);
   }
 };

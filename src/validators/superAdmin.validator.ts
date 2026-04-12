@@ -52,6 +52,33 @@ const productFieldsSchema = z.object(
   ) as Record<(typeof PRODUCT_FIELD_KEYS)[number], z.ZodOptional<z.ZodBoolean>>
 );
 
+/** Parse `req.query` in controller (validate middleware does not support query yet). */
+export const superAdminUserListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    tenantId: objectIdString.optional(),
+    role: z.enum(["user", "admin", "delivery"]).optional(),
+  })
+  .strict();
+
+export const patchSuperAdminUserSchema = z.object({
+  params: z.object({ id: objectIdString }),
+  body: z
+    .object({
+      roleId: objectIdString.optional(),
+      isSuspended: z.boolean().optional(),
+    })
+    .strict()
+    .refine((b) => b.roleId !== undefined || b.isSuspended !== undefined, {
+      message: "Provide roleId and/or isSuspended",
+    }),
+});
+
+export const orgRolesParamSchema = z.object({
+  params: z.object({ id: objectIdString }),
+});
+
 export const createOrganizationFullSchema = z.object({
   body: z
     .object({

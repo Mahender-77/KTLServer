@@ -1,8 +1,12 @@
 import multer from "multer";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
 import cloudinary from "../config/cloudinary";
 
-const storage = new CloudinaryStorage({
+// v2.x exports a factory function (not a class constructor).
+const cloudinaryStorage = require("multer-storage-cloudinary") as (
+  options: Record<string, unknown>
+) => any;
+
+const storage = cloudinaryStorage({
   cloudinary,
   params: {
     folder: "ktl_products",

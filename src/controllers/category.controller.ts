@@ -2,16 +2,9 @@ import { Request, Response } from "express";
 import * as categoryService from "../services/category.service";
 import type { AuthRequest } from "../middlewares/auth.middleware";
 import { requestActor } from "../utils/requestActor";
-import { resolvePublicOrganizationId } from "../utils/tenantScope";
+import { resolvePublicCatalogScope } from "../utils/tenantScope";
 import { AppError } from "../utils/AppError";
-
-async function resolveCategoryOrganizationId(req: Request): Promise<string | null> {
-  const authReq = req as AuthRequest;
-  if (authReq.user?._id) {
-    return requestActor(authReq).organizationId;
-  }
-  return resolvePublicOrganizationId(req);
-}
+import { appendAuditLogSafe } from "../services/auditLog.service";
 
 export const createCategory = async (req: AuthRequest, res: Response) => {
   const orgId = req.user?.organizationId?.toString?.();
@@ -23,25 +16,42 @@ export const createCategory = async (req: AuthRequest, res: Response) => {
   }
   req.body = { ...(req.body ?? {}), organizationId: orgId };
   const category = await categoryService.createCategory(orgId, req.body);
+  await appendAuditLogSafe({
+    organizationId: orgId,
+    userId: req.user!._id.toString(),
+    action: "category.created",
+    metadata: { categoryId: String(category._id), name: category.name },
+  });
   res.status(201).json(category);
 };
 
 export const getCategories = async (req: Request, res: Response) => {
-  const organizationId = await resolveCategoryOrganizationId(req);
-  if (!organizationId) {
+  const scope = await resolvePublicCatalogScope(req);
+  if (scope.mode === "single") {
+    const tree = await categoryService.getCategoriesTree(scope.organizationId);
+    return res.json(tree);
+  }
+  if (scope.organizationIds.length === 0) {
     return res.json([]);
   }
-  const tree = await categoryService.getCategoriesTree(organizationId);
+  const tree = await categoryService.getCategoriesTreeMarketplace(scope.organizationIds);
   res.json(tree);
 };
 
 export const getSubCategories = async (req: Request, res: Response) => {
-  const organizationId = await resolveCategoryOrganizationId(req);
-  if (!organizationId) {
+  const scope = await resolvePublicCatalogScope(req);
+  const parentId = (Array.isArray(req.params.parentId) ? req.params.parentId[0] : req.params.parentId) ?? "";
+  if (scope.mode === "single") {
+    const subCategories = await categoryService.getSubCategories(scope.organizationId, parentId);
+    return res.json(subCategories);
+  }
+  if (scope.organizationIds.length === 0) {
     return res.json([]);
   }
-  const parentId = (Array.isArray(req.params.parentId) ? req.params.parentId[0] : req.params.parentId) ?? "";
-  const subCategories = await categoryService.getSubCategories(organizationId, parentId);
+  const subCategories = await categoryService.getSubCategoriesMarketplace(
+    scope.organizationIds,
+    parentId
+  );
   res.json(subCategories);
 };
 
@@ -62,6 +72,12 @@ export const updateCategory = async (req: AuthRequest, res: Response) => {
   const { organizationId } = requestActor(req);
   const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) ?? "";
   const category = await categoryService.updateCategory(organizationId, id, req.body);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "category.updated",
+    metadata: { categoryId: id },
+  });
   res.json(category);
 };
 
@@ -69,5 +85,11 @@ export const deleteCategory = async (req: AuthRequest, res: Response) => {
   const { organizationId } = requestActor(req);
   const id = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) ?? "";
   const result = await categoryService.deleteCategory(organizationId, id);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "category.deleted",
+    metadata: { categoryId: id },
+  });
   res.json(result);
 };

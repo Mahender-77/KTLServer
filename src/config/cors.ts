@@ -8,6 +8,7 @@ export const allowedOrigins = getCorsOrigins();
 
 export const corsOptions: {
   origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => void;
+  credentials: boolean;
 } = {
   origin(origin, callback) {
     if (origin === undefined) {
@@ -21,4 +22,5 @@ export const corsOptions: {
     }
     callback(null, false);
   },
+  credentials: true,
 };

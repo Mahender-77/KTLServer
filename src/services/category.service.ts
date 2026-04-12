@@ -57,6 +57,36 @@ export async function getCategoriesTree(organizationId: string) {
   return tree;
 }
 
+/** Category tree across all organizations in the marketplace (each org keeps its own hierarchy). */
+export async function getCategoriesTreeMarketplace(organizationIds: string[]) {
+  const oids = organizationIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (oids.length === 0) return [];
+
+  const categories = await Category.find({
+    organizationId: { $in: oids },
+    isActive: true,
+  }).lean();
+
+  const map = new Map<string, any>();
+  categories.forEach((cat) => {
+    map.set(cat._id.toString(), { ...cat, children: [] as any[] });
+  });
+  const tree: any[] = [];
+  categories.forEach((cat) => {
+    const node = map.get(cat._id.toString());
+    if (!node) return;
+    if (cat.parent) {
+      const parent = map.get(cat.parent.toString());
+      if (parent) parent.children.push(node);
+    } else {
+      tree.push(node);
+    }
+  });
+  return tree;
+}
+
 export async function getSubCategories(
   organizationId: string,
   parentId: string
@@ -70,6 +100,24 @@ export async function getSubCategories(
       isActive: true,
     })
   );
+}
+
+export async function getSubCategoriesMarketplace(
+  organizationIds: string[],
+  parentId: string
+) {
+  if (!mongoose.Types.ObjectId.isValid(parentId)) {
+    throw new AppError("Invalid parent ID", 400, "INVALID_PARENT_ID");
+  }
+  const oids = organizationIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (oids.length === 0) return [];
+  return Category.find({
+    organizationId: { $in: oids },
+    parent: new mongoose.Types.ObjectId(parentId),
+    isActive: true,
+  });
 }
 
 export async function getFlatCategories(organizationId: string) {

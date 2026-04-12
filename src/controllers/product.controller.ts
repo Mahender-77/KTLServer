@@ -1,10 +1,12 @@
+import { logger } from '../utils/logger';
 import { Request, Response } from "express";
 import { getPaginationParams, paginated } from "../utils/pagination";
 import * as productService from "../services/product.service";
 import { AppError } from "../utils/AppError";
 import type { AuthRequest } from "../middlewares/auth.middleware";
 import { requestActor } from "../utils/requestActor";
-import { resolvePublicOrganizationId } from "../utils/tenantScope";
+import { resolvePublicCatalogScope, resolvePublicOrganizationId } from "../utils/tenantScope";
+import { appendAuditLogSafe } from "../services/auditLog.service";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -114,6 +116,13 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     orgId
   );
 
+  await appendAuditLogSafe({
+    organizationId: orgId,
+    userId: req.user!._id.toString(),
+    action: "product.created",
+    metadata: { productId: String(product._id), name: product.name },
+  });
+
   res.status(201).json(product);
 };
 
@@ -133,29 +142,28 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 
 export const getPublicProducts = async (req: Request, res: Response) => {
   // Debug: if you don't see this in your backend terminal, the request is NOT reaching this server
-  console.log("[getPublicProducts] Request received — backend is being hit");
+  logger.log("[getPublicProducts] Request received — backend is being hit");
   const { page, limit, skip } = getPaginationParams(req);
   const category = req.query.category as string | undefined;
-  const organizationId = await resolvePublicOrganizationId(req);
-  if (!organizationId) {
-    const empty = paginated([], 0, page, limit);
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-KTL-Backend", "true");
-    return res.json({
-      data: [],
-      total: empty.total,
-      page: empty.page,
-      totalPages: empty.totalPages,
-      __source: "ktl-backend",
-    });
-  }
-  const result = await productService.getPublicProducts({
-    category,
-    page,
-    limit,
-    skip,
-    organizationId,
-  });
+  const scope = await resolvePublicCatalogScope(req);
+  const result =
+    scope.mode === "single"
+      ? await productService.getPublicProducts({
+          category,
+          page,
+          limit,
+          skip,
+          organizationId: scope.organizationId,
+        })
+      : scope.organizationIds.length === 0
+        ? paginated([], 0, page, limit)
+        : await productService.getPublicProducts({
+            category,
+            page,
+            limit,
+            skip,
+            organizationIds: scope.organizationIds,
+          });
   // Ensure every product has _id and images (never omitted by JSON serialization)
   const normalizedData = (result.data || []).map((p: any) => ({
     _id:              p._id ?? p.id ?? "",
@@ -192,11 +200,14 @@ export const getPublicProducts = async (req: Request, res: Response) => {
 
 export const getProductById = async (req: Request, res: Response) => {
   const id = paramId(req.params.id);
-  const organizationId = await resolvePublicOrganizationId(req);
-  if (!organizationId) {
+  const scope = await resolvePublicCatalogScope(req);
+  if (scope.mode === "marketplace" && scope.organizationIds.length === 0) {
     throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
   }
-  const product = await productService.getProductById(id, organizationId);
+  const product =
+    scope.mode === "single"
+      ? await productService.getProductById(id, scope.organizationId)
+      : await productService.getProductByIdMarketplace(id, scope.organizationIds);
   res.status(200).json(product);
 };
 
@@ -211,6 +222,12 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
   const { organizationId } = requestActor(req);
   const id = paramId(req.params.id);
   const result = await productService.deleteProduct(id, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "product.deleted",
+    metadata: { productId: id },
+  });
   res.json(result);
 };
 
@@ -252,6 +269,12 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   if (body.isActive !== undefined) updateData.isActive = coerceBool(body.isActive);
 
   const product = await productService.updateProduct(id, updateData, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "product.updated",
+    metadata: { productId: id },
+  });
   res.status(200).json(product);
 };
 
@@ -259,6 +282,12 @@ export const addBatch = async (req: AuthRequest, res: Response) => {
   const { organizationId } = requestActor(req);
   const id = paramId(req.params.id);
   const result = await productService.addBatch(id, req.body, organizationId);
+  await appendAuditLogSafe({
+    organizationId,
+    userId: req.user!._id.toString(),
+    action: "inventory.batch_added",
+    metadata: { productId: id },
+  });
   res.status(201).json(result);
 };
 

@@ -12,6 +12,7 @@ import {
 } from "../validators/superAdmin.validator";
 import {
   listOrganizations,
+  getOrganization,
   patchOrganizationModules,
   patchOrganizationStatus,
   createPlan,
@@ -19,15 +20,32 @@ import {
   patchOrganizationPlan,
   createOrganizationFull,
 } from "../controllers/superAdmin.controller";
+import {
+  listSuperAdminUsers,
+  getSuperAdminUser,
+  patchSuperAdminUser,
+  listOrganizationRoles,
+} from "../controllers/superAdminUsers.controller";
+import { patchSuperAdminUserSchema, orgRolesParamSchema } from "../validators/superAdmin.validator";
 
 const router = express.Router();
 
 router.use(protect);
 router.use(checkSuperAdmin);
 
+router.get("/users", asyncHandler(listSuperAdminUsers));
+router.get("/users/:id", asyncHandler(getSuperAdminUser));
+router.patch("/users/:id", validate(patchSuperAdminUserSchema), asyncHandler(patchSuperAdminUser));
+
 router.get("/organizations", asyncHandler(listOrganizations));
+router.get(
+  "/organizations/:id/roles",
+  validate(orgRolesParamSchema),
+  asyncHandler(listOrganizationRoles)
+);
+router.get("/organizations/:id", asyncHandler(getOrganization));
 router.patch(
-  "/organizations/:id/modules",
+    "/organizations/:id/modules",
   validate(patchOrgModulesSchema),
   asyncHandler(patchOrganizationModules)
 );

@@ -41,6 +41,29 @@ export const logoutSchema = z.object({
   }),
 });
 
+export const changePasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(1, "Current password is required"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm password is required"),
+  }),
+});
+
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: emailSchema,
+  }),
+});
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    email: emailSchema,
+    token: z.string().min(1, "Reset token is required"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm password is required"),
+  }),
+});
+
 export type RegisterBody = z.infer<typeof registerSchema>["body"];
 export type LoginBody = z.infer<typeof loginSchema>["body"];
 export type RefreshBody = z.infer<typeof refreshSchema>["body"];

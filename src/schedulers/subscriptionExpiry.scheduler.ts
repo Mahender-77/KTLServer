@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 import cron from "node-cron";
 import Organization, { SUBSCRIPTION_STATUS } from "../models/Organization";
 
@@ -25,7 +26,7 @@ export function startSubscriptionExpiryScheduler(): void {
 
       try {
         const result = await Organization.updateMany(filter, update);
-        console.log(
+        logger.log(
           JSON.stringify({
             type: "SUBSCRIPTION_EXPIRY_CRON",
             ts: now.toISOString(),
@@ -34,7 +35,7 @@ export function startSubscriptionExpiryScheduler(): void {
           })
         );
       } catch (err) {
-        console.error("[SUBSCRIPTION_EXPIRY_CRON] failed:", err);
+        logger.error("[SUBSCRIPTION_EXPIRY_CRON] failed:", err);
       }
     },
     {
@@ -42,6 +43,6 @@ export function startSubscriptionExpiryScheduler(): void {
     }
   );
 
-  console.log("[SUBSCRIPTION_EXPIRY_CRON] scheduler started (daily, UTC).");
+  logger.log("[SUBSCRIPTION_EXPIRY_CRON] scheduler started (daily, UTC).");
 }
 

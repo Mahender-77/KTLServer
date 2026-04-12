@@ -7,6 +7,12 @@ import { paginated, PaginatedResponse } from "../utils/pagination";
 import { AppError } from "../utils/AppError";
 import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
 import { tenantFilterFromActor } from "../utils/tenantFilter";
+import { syncInventoryFromProduct } from "./inventory.service";
+import {
+  applyCreateProductFieldConfig,
+  applyUpdateProductFieldConfig,
+  getProductFieldConfigForOrganization,
+} from "../utils/productFieldConfig";
 
 const now = () => new Date();
 
@@ -223,6 +229,8 @@ export async function createProduct(
   },
   organizationId: string
 ) {
+  const cfg = await getProductFieldConfigForOrganization(organizationId);
+  const sanitized = applyCreateProductFieldConfig(data, cfg);
   const {
     name, description, category,
     pricingMode = "unit",
@@ -230,7 +238,7 @@ export async function createProduct(
     hasExpiry = false,
     variants, imageUrl, shelfLifeDays,
     tags, taxRate, minOrderQty, maxOrderQty,
-  } = data;
+  } = sanitized;
 
   if (!name || !category) {
     throw new AppError("Missing required fields", 400, "MISSING_FIELDS");
@@ -338,7 +346,7 @@ export async function getProducts(params: {
 
 export async function updateProduct(
   id: string,
-  data: {
+  rawData: {
     name?: string;
     description?: string;
     category?: string;
@@ -359,6 +367,9 @@ export async function updateProduct(
 ) {
   const product = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) });
   if (!product) throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+
+  const cfg = await getProductFieldConfigForOrganization(organizationId);
+  const data = applyUpdateProductFieldConfig(rawData, cfg);
 
   const {
     name, description, category, pricingMode, baseUnit, pricePerUnit,
@@ -416,7 +427,11 @@ export async function updateProduct(
   if (minOrderQty !== undefined && maxOrderQty !== undefined && minOrderQty != null && maxOrderQty != null && minOrderQty > maxOrderQty) {
     throw new AppError("minOrderQty cannot be greater than maxOrderQty", 400, "INVALID_ORDER_QTY");
   }
-  if (pricingMode === "fixed" && Array.isArray(variants) && variants.length === 0) {
+  const nextMode: "fixed" | "custom-weight" | "unit" =
+    pricingMode ?? (product as any).pricingMode ?? "unit";
+  const nextVariants =
+    variants !== undefined ? variants : ((product as any).variants as any[] | undefined);
+  if (nextMode === "fixed" && (!Array.isArray(nextVariants) || nextVariants.length === 0)) {
     throw new AppError("At least one variant is required for fixed pricing", 400, "MISSING_FIELDS");
   }
 
@@ -441,20 +456,37 @@ export async function deleteProduct(id: string, organizationId: string) {
 
 // ─── getPublicProducts ────────────────────────────────────────────────────────
 
+function marketplaceOrgFilter(organizationIds: string[]): Record<string, unknown> {
+  const oids = organizationIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (oids.length === 0) return { _id: { $in: [] } };
+  return { organizationId: { $in: oids } };
+}
+
 export async function getPublicProducts(params: {
   category?: string;
   page: number;
   limit: number;
   skip: number;
-  organizationId: string;
+  organizationId?: string;
+  organizationIds?: string[];
 }): Promise<PaginatedResponse<any>> {
-  const { category, page, limit, skip, organizationId } = params;
+  const { category, page, limit, skip, organizationId, organizationIds } = params;
 
   const filter: Record<string, unknown> = {
     isActive: true,
     "inventoryBatches.quantity": { $gt: 0 },
   };
-  Object.assign(filter, tenantWhereClause(organizationId));
+
+  if (organizationIds && organizationIds.length > 0) {
+    Object.assign(filter, marketplaceOrgFilter(organizationIds));
+  } else if (organizationId) {
+    Object.assign(filter, tenantWhereClause(organizationId));
+  } else {
+    return paginated([], 0, page, limit);
+  }
+
   if (category) filter.category = category;
 
   const [rawProducts, total] = await Promise.all([
@@ -481,6 +513,21 @@ export async function getProductById(id: string, organizationId: string) {
   const product = await Product.findOne({ _id: id, ...tenantWhereClause(organizationId) })
     .populate("category", "name slug")
     .lean();
+
+  if (!product || !(product as any).isActive) {
+    throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
+  }
+  return formatProductForListing(product);
+}
+
+/** Public product detail when browsing marketplace (no single org in request). */
+export async function getProductByIdMarketplace(id: string, organizationIds: string[]) {
+  const filter: Record<string, unknown> = {
+    _id: id,
+    isActive: true,
+    ...marketplaceOrgFilter(organizationIds),
+  };
+  const product = await Product.findOne(filter).populate("category", "name slug").lean();
 
   if (!product || !(product as any).isActive) {
     throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
@@ -516,6 +563,15 @@ export type AddBatchInput = {
 };
 
 export async function addBatch(productId: string, data: AddBatchInput, organizationId: string) {
+  const cfg = await getProductFieldConfigForOrganization(organizationId);
+  if (!cfg.inventoryBatches) {
+    throw new AppError(
+      "Inventory batches are disabled for this organization",
+      403,
+      "PRODUCT_FIELD_DISABLED"
+    );
+  }
+
   const product = await Product.findOne({ _id: productId, ...tenantWhereClause(organizationId) })
     .select("pricingMode hasExpiry inventoryBatches baseUnit")
     .lean();
@@ -592,6 +648,8 @@ export async function addBatch(productId: string, data: AddBatchInput, organizat
   const updated = await Product.findOne({ _id: productId, ...tenantWhereClause(organizationId) })
     .select("name _id inventoryBatches")
     .lean();
+
+  await syncInventoryFromProduct(productId, organizationId);
 
   return { message: "Batch added successfully", product: updated };
 }

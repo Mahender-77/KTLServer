@@ -10,6 +10,8 @@ import type { RequestActor } from "../types/access";
 import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
 import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
 import { tenantFilterFromActor } from "../utils/tenantFilter";
+import { syncInventoryFromProduct, maybeLogLowStock } from "./inventory.service";
+import { appendAuditLog } from "./auditLog.service";
 
 type BatchDoc = {
   _id: mongoose.Types.ObjectId;
@@ -341,6 +343,19 @@ export async function createOrder(
       }
     }
 
+    const uniqueProductIds = [...new Set(items.map((it: { product: unknown }) => String(it.product)))];
+    for (const pidStr of uniqueProductIds) {
+      const synced = await syncInventoryFromProduct(pidStr, organizationId, session);
+      await maybeLogLowStock({
+        organizationId,
+        userId,
+        productId: synced.productId,
+        quantity: synced.quantity,
+        lowStockThreshold: synced.lowStockThreshold,
+        session,
+      });
+    }
+
     const productCategoryMap = new Map();
     products.forEach((product: any) => {
       productCategoryMap.set(product._id.toString(), {
@@ -444,6 +459,20 @@ export async function createOrder(
       cart.items.splice(0, cart.items.length);
       await cart.save({ session });
     }
+
+    await appendAuditLog(
+      {
+        organizationId,
+        userId,
+        action: "order.placed",
+        metadata: {
+          orderId: order._id.toString(),
+          totalAmount: serverTotalAmount,
+          itemCount: items.length,
+        },
+      },
+      session
+    );
 
     await session.commitTransaction();
 
@@ -610,4 +639,40 @@ export async function getOrderByIdForAdmin(
     .lean();
   if (!order) throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
   return order;
+}
+
+export async function updateOrderStatusForAdmin(
+  orderId: string,
+  status: "confirmed" | "out_for_delivery" | "delivered" | "cancelled",
+  organizationId: string
+) {
+  const dbOrderStatus: "placed" | "shipped" | "delivered" | "cancelled" =
+    status === "out_for_delivery"
+      ? "shipped"
+      : status === "confirmed"
+        ? "placed"
+        : status;
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { _id: orderId, ...tenantWhereClause(organizationId) },
+    { $set: { orderStatus: dbOrderStatus } },
+    { new: true }
+  )
+    .select("_id user orderStatus totalAmount")
+    .lean();
+
+  if (!updatedOrder) {
+    throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+  }
+
+  const buyerId = updatedOrder.user?.toString?.() ?? String(updatedOrder.user ?? "");
+  if (!buyerId) {
+    throw new AppError("Order buyer not found", 400, "ORDER_BUYER_NOT_FOUND");
+  }
+
+  return {
+    orderId: updatedOrder._id.toString(),
+    buyerId,
+    order: updatedOrder,
+  };
 }

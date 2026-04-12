@@ -15,6 +15,12 @@ export const listOrganizations = async (req: AuthRequest, res: Response) => {
   res.json(result);
 };
 
+export const getOrganization = async (req: AuthRequest, res: Response) => {
+  const id = paramId(req.params.id);
+  const result = await superAdminService.getOrganizationById(id);
+  res.json({ organization: result });
+};
+
 export const patchOrganizationModules = async (req: AuthRequest, res: Response) => {
   const id = paramId(req.params.id);
   const { modules } = req.body as { modules: OrgModuleKey[] };

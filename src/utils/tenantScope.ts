@@ -4,6 +4,32 @@ import Organization from "../models/Organization";
 import { AppError } from "./AppError";
 import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap";
 
+/** Public catalog: single org (header/query) or all active organizations (marketplace). */
+export type PublicCatalogScope =
+  | { mode: "single"; organizationId: string }
+  | { mode: "marketplace"; organizationIds: string[] };
+
+export async function getActiveOrganizationIds(): Promise<string[]> {
+  const rows = await Organization.find({ isActive: { $ne: false } })
+    .select("_id")
+    .lean();
+  return rows.map((r) => r._id.toString());
+}
+
+/**
+ * Resolves public API scope for consumer apps.
+ * If `X-Organization-Id` or `?organizationId=` is set to an active org → single-tenant.
+ * Otherwise → marketplace (all active organizations).
+ */
+export async function resolvePublicCatalogScope(req: Request): Promise<PublicCatalogScope> {
+  const explicit = await resolvePublicOrganizationId(req);
+  if (explicit) {
+    return { mode: "single", organizationId: explicit };
+  }
+  const ids = await getActiveOrganizationIds();
+  return { mode: "marketplace", organizationIds: ids };
+}
+
 export function normalizeOrganizationId(value: unknown): string | null {
   if (value == null) return null;
   if (typeof value === "string") return value.trim() || null;

@@ -5,6 +5,48 @@ import { AppError } from "../utils/AppError";
 import { ROLES } from "../constants/roles";
 import type { RequestActor } from "../types/access";
 import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
+import * as pushService from "./push.service";
+
+function getBuyerUserIdFromSubOrder(subOrder: { order?: unknown }): string | null {
+  const order = subOrder?.order;
+  if (order == null || typeof order !== "object" || !("user" in order)) return null;
+  const u = (order as { user?: unknown }).user;
+  if (u == null) return null;
+  if (typeof u === "string") return u;
+  if (typeof u === "object" && "_id" in u && (u as { _id?: { toString(): string } })._id) {
+    return (u as { _id: { toString(): string } })._id.toString();
+  }
+  return null;
+}
+
+/**
+ * Single sub-order for courier: same visibility as list (pool pending, or assigned to this user).
+ */
+export async function getDeliverySubOrderById(
+  userId: string,
+  organizationId: string,
+  subOrderId: string
+): Promise<Record<string, unknown>> {
+  const filter = andWithTenant(organizationId, {
+    _id: subOrderId,
+    $or: [{ deliveryBoyId: userId }, { deliveryBoyId: null, deliveryStatus: "pending" }],
+  });
+  const subOrder = await SubOrder.findOne(filter)
+    .populate({
+      path: "order",
+      populate: { path: "user", select: "name email phone" },
+      select: "user address createdAt totalAmount paymentStatus orderStatus",
+    })
+    .populate("category", "name")
+    .populate("items.product", "name images")
+    .populate("deliveryBoyId", "name phone")
+    .lean();
+
+  if (!subOrder) {
+    throw new AppError("SubOrder not found or not available", 404, "SUBORDER_NOT_FOUND");
+  }
+  return subOrder as unknown as Record<string, unknown>;
+}
 
 export async function getDeliverySubOrders(
   userId: string,
@@ -62,6 +104,10 @@ export async function acceptSubOrder(userId: string, organizationId: string, sub
       "SUBORDER_UNAVAILABLE"
     );
   }
+  const orderPopulated = subOrder.order as { address?: { address?: string } } | null | undefined;
+  const targetAddress =
+    typeof orderPopulated?.address?.address === "string" ? orderPopulated.address.address : undefined;
+  void pushService.notifyDeliveryAssigned({ _id: subOrder._id, address: targetAddress }, userId, organizationId);
   return { message: "SubOrder accepted successfully", subOrder };
 }
 
@@ -89,6 +135,13 @@ export async function startSubOrderDelivery(userId: string, organizationId: stri
       403,
       "SUBORDER_UNAUTHORIZED"
     );
+  }
+  {
+    const buyerId = getBuyerUserIdFromSubOrder(subOrder);
+    const orderId = subOrder.order?._id?.toString?.();
+    if (buyerId && orderId) {
+      void pushService.notifyOrderStatusChanged(buyerId, "In Transit", orderId, organizationId);
+    }
   }
   return { message: "Delivery started", subOrder };
 }
@@ -130,6 +183,14 @@ export async function completeSubOrderDelivery(userId: string, organizationId: s
     );
     if (!updatedOrder) {
       throw new AppError("Order not found", 404, "ORDER_NOT_FOUND");
+    }
+  }
+
+  {
+    const buyerId = getBuyerUserIdFromSubOrder(subOrder);
+    const orderId = subOrder.order?._id?.toString?.();
+    if (buyerId && orderId) {
+      void pushService.notifyOrderStatusChanged(buyerId, "Delivered", orderId, organizationId);
     }
   }
 

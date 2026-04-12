@@ -4,6 +4,7 @@ import { deliveryOnly } from "../middlewares/requireRole.middleware";
 import { checkModule } from "../middlewares/checkModule.middleware";
 import { ORG_MODULES } from "../constants/modules";
 import {
+  getDeliverySubOrderById,
   getDeliverySubOrders,
   acceptSubOrder,
   startSubOrderDelivery,
@@ -29,6 +30,7 @@ router.get("/suborders/:id/tracking", validate(idParamSchema), asyncHandler(getS
 router.use(deliveryOnly);
 
 router.get("/suborders", asyncHandler(getDeliverySubOrders));
+router.get("/suborders/:id", validate(idParamSchema), asyncHandler(getDeliverySubOrderById));
 router.post("/suborders/:id/accept", validate(idParamSchema), asyncHandler(acceptSubOrder));
 router.post("/suborders/:id/start-delivery", validate(idParamSchema), asyncHandler(startSubOrderDelivery));
 router.post("/suborders/:id/complete", validate(idParamSchema), asyncHandler(completeSubOrderDelivery));

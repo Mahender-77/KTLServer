@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import Role from "../models/Role";
 import { ROLES } from "../constants/roles";
 import { AppError } from "../utils/AppError";
+import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions";
 
 type LegacyRole = (typeof ROLES)[keyof typeof ROLES];
 
@@ -49,6 +50,12 @@ export function checkPermission(permission: string) {
       return;
     }
 
+    // Align with `checkModule`: platform super-admins bypass per-tenant RBAC lookups.
+    if ((actor as { isSuperAdmin?: boolean }).isSuperAdmin === true) {
+      next();
+      return;
+    }
+
     const organizationId = actor.organizationId?.toString?.() ?? actor.organizationId;
     if (!organizationId) {
       next(new AppError("Organization context is required", 403, "ORG_REQUIRED"));
@@ -78,12 +85,23 @@ export function checkPermission(permission: string) {
       }
     }
 
+    // Tenant admins without a Role row (legacy / migration gaps) still get default Admin capabilities.
     if (!role) {
-      res.status(403).json({ message: "Access denied" });
+      if (actor.role !== ROLES.ADMIN) {
+        res.status(403).json({ message: "Access denied" });
+        return;
+      }
+      const effective = mergeWithTenantAdminDefaults(ROLES.ADMIN, []);
+      if (!roleAllowsPermission(effective, permission)) {
+        res.status(403).json({ message: "Access denied" });
+        return;
+      }
+      next();
       return;
     }
 
-    if (!roleAllowsPermission(role.permissions ?? [], permission)) {
+    const effective = mergeWithTenantAdminDefaults(actor.role as LegacyRole | undefined, role.permissions ?? []);
+    if (!roleAllowsPermission(effective, permission)) {
       res.status(403).json({ message: "Access denied" });
       return;
     }

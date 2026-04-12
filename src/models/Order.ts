@@ -60,9 +60,27 @@ const orderSchema = new mongoose.Schema(
 
     deliveryStatus: {
       type: String,
-      enum: ["assigned", "accepted", "in-transit", "delivered"],
+      enum: ["pending", "assigned", "accepted", "in-transit", "out_for_delivery", "delivered"],
+      default: "pending",
+    },
+
+    deliveryBoy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       default: null,
     },
+    rejectedBy: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    acceptedAt: { type: Date, default: null },
+    pickedUpAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
+    otp: { type: String, default: null, select: false },
+    otpExpiry: { type: Date, default: null },
+    otpAttempts: { type: Number, default: 0 },
 
     deliveryPersonLocation: {
       latitude: { type: Number, default: null },

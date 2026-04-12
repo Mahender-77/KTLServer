@@ -26,3 +26,9 @@ export const createOrderSchema = z.object({
   }),
 });
 
+export const updateOrderStatusSchema = z.object({
+  body: z.object({
+    status: z.enum(["confirmed", "out_for_delivery", "delivered", "cancelled"]),
+  }),
+});
+

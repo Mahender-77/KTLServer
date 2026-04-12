@@ -1,3 +1,5 @@
+import { logger } from "../utils/logger";
+import crypto from "crypto";
 import mongoose from "mongoose";
 import User from "../models/User";
 import Organization from "../models/Organization";
@@ -19,6 +21,8 @@ import {
 import Role from "../models/Role";
 import { DEFAULT_ORG_MODULES, ORG_MODULE_KEYS } from "../constants/modules";
 import { DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields";
+import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions";
+import { appendAuditLogSafe } from "./auditLog.service";
 
 const REFRESH_TOKEN_DAYS = 7;
 
@@ -102,11 +106,34 @@ export async function register(data: { name: string; email: string; password: st
 }
 
 export async function login(data: { email: string; password: string }) {
-  console.log("login data", data);
-  const user = await User.findOne({ email: data.email }).select("+password");
+  logger.log("login data", data);
+  const user = await User.findOne({ email: data.email }).select("+password +failedLoginAttempts +lockOutUntil");
   if (!user) throw new AppError("Invalid credentials", 401, "INVALID_CREDENTIALS");
+
+  if (user.isSuspended) {
+    throw new AppError("Account suspended", 403, "ACCOUNT_SUSPENDED");
+  }
+
+  if (user.lockOutUntil && user.lockOutUntil > new Date()) {
+    throw new AppError("Account locked out. Try again later", 403, "ACCOUNT_LOCKED");
+  }
+
   const isMatch = await user.comparePassword(data.password);
-  if (!isMatch) throw new AppError("Invalid credentials", 401, "INVALID_CREDENTIALS");
+  
+  if (!isMatch) {
+    user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+    if (user.failedLoginAttempts >= 5) {
+      user.lockOutUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+    }
+    await user.save();
+    throw new AppError("Invalid credentials", 401, "INVALID_CREDENTIALS");
+  }
+
+  if ((user.failedLoginAttempts && user.failedLoginAttempts > 0) || user.lockOutUntil) {
+    user.failedLoginAttempts = 0;
+    user.lockOutUntil = null;
+    await user.save();
+  }
 
   if (user.organizationId == null && !user.isSuperAdmin) {
     // Legacy safety: attach the user to the default organization.
@@ -140,6 +167,16 @@ export async function login(data: { email: string; password: string }) {
   const refreshToken = generateRefreshToken(userId, organizationId, tokenOpts);
   await saveRefreshToken(userId, refreshToken);
   await refreshDefaultOrgCache();
+
+  if (!user.isSuperAdmin && organizationId && user.role === ROLES.ADMIN) {
+    void appendAuditLogSafe({
+      organizationId,
+      userId,
+      action: "admin.login",
+      metadata: { channel: "web_admin" },
+    });
+  }
+
   return { message: "Login successful", accessToken, refreshToken };
 }
 
@@ -161,8 +198,12 @@ export async function refresh(refreshToken: string) {
   }
   await RefreshToken.updateOne({ _id: stored._id }, { revoked: true });
 
-  const user = await User.findById(decoded.id).select("organizationId isSuperAdmin");
+  const user = await User.findById(decoded.id).select("organizationId isSuperAdmin isSuspended");
   if (!user) throw new AppError("User not found", 404, "USER_NOT_FOUND");
+
+  if (user.isSuspended) {
+    throw new AppError("Account suspended", 403, "ACCOUNT_SUSPENDED");
+  }
 
   if (user.isSuperAdmin) {
     const orgStr = user.organizationId?.toString();
@@ -195,6 +236,98 @@ export async function logout(refreshToken: string | undefined) {
   return { message: "Logged out" };
 }
 
+function hashPasswordResetToken(plain: string): string {
+  return crypto.createHash("sha256").update(plain, "utf8").digest("hex");
+}
+
+function isAdminPanelUser(user: { role?: string; isSuperAdmin?: boolean }): boolean {
+  return user.isSuperAdmin === true || user.role === ROLES.ADMIN;
+}
+
+export async function changePassword(
+  userId: string,
+  data: { currentPassword: string; newPassword: string; confirmPassword: string }
+): Promise<{ message: string }> {
+  if (data.newPassword !== data.confirmPassword) {
+    throw new AppError("New password and confirmation do not match", 400, "PASSWORD_MISMATCH");
+  }
+  const user = await User.findById(userId).select("+password");
+  if (!user) throw new AppError("User not found", 404, "USER_NOT_FOUND");
+  const ok = await user.comparePassword(data.currentPassword);
+  if (!ok) {
+    throw new AppError("Current password is incorrect", 401, "INVALID_CURRENT_PASSWORD");
+  }
+  user.password = data.newPassword;
+  await user.save();
+  return { message: "Password updated successfully" };
+}
+
+export async function requestPasswordReset(email: string): Promise<{
+  message: string;
+  resetToken?: string;
+  expiresInMinutes?: number;
+}> {
+  const normalized = email.toLowerCase().trim();
+  const genericMessage = "If your email is registered for an admin account, you can reset your password.";
+
+  const user = await User.findOne({ email: normalized }).select(
+    "+passwordResetTokenHash +passwordResetExpires"
+  );
+  if (!user || !isAdminPanelUser(user)) {
+    return { message: genericMessage };
+  }
+
+  const plain = crypto.randomBytes(32).toString("hex");
+  const hash = hashPasswordResetToken(plain);
+  user.passwordResetTokenHash = hash;
+  user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+  await user.save();
+
+  const expose = process.env.PASSWORD_RESET_RETURN_TOKEN === "true";
+  if (expose) {
+    return {
+      message:
+        "Reset token generated. Use it on the reset page within 1 hour. Do not share this token.",
+      resetToken: plain,
+      expiresInMinutes: 60,
+    };
+  }
+  return { message: genericMessage };
+}
+
+export async function resetPasswordWithToken(data: {
+  email: string;
+  token: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ message: string }> {
+  if (data.newPassword !== data.confirmPassword) {
+    throw new AppError("New password and confirmation do not match", 400, "PASSWORD_MISMATCH");
+  }
+  const normalized = data.email.toLowerCase().trim();
+  const user = await User.findOne({ email: normalized }).select(
+    "+password +passwordResetTokenHash +passwordResetExpires"
+  );
+  if (!user || !user.passwordResetTokenHash || !user.passwordResetExpires) {
+    throw new AppError("Invalid or expired reset token", 400, "RESET_INVALID");
+  }
+  if (user.passwordResetExpires < new Date()) {
+    throw new AppError("Reset token has expired. Request a new one.", 400, "RESET_EXPIRED");
+  }
+  if (!isAdminPanelUser(user)) {
+    throw new AppError("Invalid or expired reset token", 400, "RESET_INVALID");
+  }
+  const submittedHash = hashPasswordResetToken(data.token.trim());
+  if (submittedHash !== user.passwordResetTokenHash) {
+    throw new AppError("Invalid or expired reset token", 400, "RESET_INVALID");
+  }
+  user.password = data.newPassword;
+  user.passwordResetTokenHash = null;
+  user.passwordResetExpires = null;
+  await user.save();
+  return { message: "Password reset successfully. You can sign in now." };
+}
+
 export async function getCurrentUser(userId: string) {
   const user = await User.findById(userId).select("-password");
   if (!user) throw new AppError("User not found", 404, "USER_NOT_FOUND");
@@ -208,7 +341,7 @@ export async function getCurrentUser(userId: string) {
         organizationId: user.organizationId?.toString?.() ?? null,
         isSuperAdmin: true,
       },
-      organization: { modules: [...ORG_MODULE_KEYS] },
+      organization: { name: "", modules: [...ORG_MODULE_KEYS] },
       permissions: ["*"],
       productFields: { ...DEFAULT_PRODUCT_FIELD_CONFIG },
     };
@@ -216,7 +349,7 @@ export async function getCurrentUser(userId: string) {
 
   const organizationId = user.organizationId?.toString?.() ?? null;
   const org = organizationId
-    ? await Organization.findById(organizationId).select("modules productFieldConfig").lean()
+    ? await Organization.findById(organizationId).select("name modules productFieldConfig").lean()
     : null;
 
   let roleDoc = null as null | { permissions?: string[] };
@@ -245,6 +378,8 @@ export async function getCurrentUser(userId: string) {
       .lean()) as { permissions?: string[] } | null;
   }
 
+  const permissionsOut = mergeWithTenantAdminDefaults(user.role as string | undefined, roleDoc?.permissions ?? []);
+
   return {
     user: {
       name: user.name,
@@ -254,9 +389,10 @@ export async function getCurrentUser(userId: string) {
       isSuperAdmin: false,
     },
     organization: {
+      name: org?.name ?? "",
       modules: org?.modules ?? [],
     },
-    permissions: roleDoc?.permissions ?? [],
+    permissions: permissionsOut,
     productFields: org?.productFieldConfig ?? { ...DEFAULT_PRODUCT_FIELD_CONFIG },
   };
 }

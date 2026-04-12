@@ -1,3 +1,4 @@
+import { logger } from '../utils/logger';
 /**
  * Central environment configuration. All server settings should be read from here or `process.env` via these helpers.
  * Future: inject organization-specific config or secrets from a vault without scattering `process.env` usage.
@@ -24,7 +25,7 @@ export function getListenHost(): string {
 export function getMongoUri(): string {
   const u = process.env.MONGO_URI?.trim();
   if (u) return u;
-  console.error("FATAL: MONGO_URI is required. Copy server/.env.example to server/.env and set MONGO_URI.");
+  logger.error("FATAL: MONGO_URI is required. Copy server/.env.example to server/.env and set MONGO_URI.");
   process.exit(1);
 }
 
@@ -36,7 +37,7 @@ export function getCorsOrigins(): string[] {
   const raw = process.env.CORS_ORIGINS?.trim();
   if (!raw) {
     if (!isProduction) {
-      console.warn(
+      logger.warn(
         "[config] CORS_ORIGINS is empty — browser requests with an Origin header may be blocked. Set CORS_ORIGINS in .env (see .env.example)."
       );
     }
@@ -52,7 +53,7 @@ export function assertJwtSecrets(): void {
   const a = process.env.JWT_SECRET?.trim();
   const b = process.env.JWT_REFRESH_SECRET?.trim();
   if (!a || a.length < 16 || !b || b.length < 16) {
-    console.error(
+    logger.error(
       "Fatal: JWT_SECRET and JWT_REFRESH_SECRET must be set and at least 16 characters each."
     );
     process.exit(1);

@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Store from "../models/Store";
 import { paginated, PaginatedResponse } from "../utils/pagination";
 import { tenantWhereClause } from "../utils/tenantScope";
@@ -50,7 +51,21 @@ export async function getStores(params: {
 export async function getPublicStores(organizationId: string) {
   const filter = { ...tenantWhereClause(organizationId), isActive: true };
   return Store.find(filter)
-    .select("name city deliveryFee location")
+    .select("name city deliveryFee location address")
+    .sort({ createdAt: -1 })
+    .lean();
+}
+
+export async function getPublicStoresMarketplace(organizationIds: string[]) {
+  const oids = organizationIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  if (oids.length === 0) return [];
+  return Store.find({
+    organizationId: { $in: oids },
+    isActive: true,
+  })
+    .select("name city deliveryFee location address")
     .sort({ createdAt: -1 })
     .lean();
 }
