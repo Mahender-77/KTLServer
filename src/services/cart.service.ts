@@ -1,31 +1,34 @@
-import Cart from "../models/Cart";
-import Product from "../models/Product";
-import { AppError } from "../utils/AppError";
-import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service";
-import { tenantWhereClause } from "../utils/tenantScope";
+import Cart from "../models/Cart.js";
+import Product from "../models/Product.js";
+import { AppError } from "../utils/AppError.js";
+import { qualifiesForDealOfTheDay, DEAL_DISCOUNT_PERCENT } from "./product.service.js";
+import { tenantWhereClause } from "../utils/tenantScope.js";
 
-async function formatCartItems(cartItems: any[], organizationId: string) {
+const PRODUCT_SELECT_CART =
+  "name images variants pricingMode pricePerUnit baseUnit hasExpiry inventoryBatches organizationId isActive";
+
+/** Load product for cart display — marketplace lists products from any org; do not scope by JWT org. */
+async function loadProductForCartItem(productRef: unknown) {
+  const id =
+    typeof productRef === "string"
+      ? productRef
+      : productRef && typeof productRef === "object" && "_id" in (productRef as object)
+        ? String((productRef as { _id: unknown })._id)
+        : null;
+  if (!id) return null;
+  return Product.findOne({
+    _id: id,
+    isActive: { $ne: false },
+  })
+    .select(PRODUCT_SELECT_CART)
+    .lean();
+}
+
+async function formatCartItems(cartItems: any[]) {
   const formattedItems = await Promise.all(
     cartItems.map(async (item) => {
       try {
-        let product = item.product;
-        const select =
-          "name images variants pricingMode pricePerUnit baseUnit hasExpiry inventoryBatches organizationId";
-        if (typeof product === "string") {
-          product = await Product.findOne({
-            _id: product,
-            ...tenantWhereClause(organizationId),
-          })
-            .select(select)
-            .lean();
-        } else if (product) {
-          product = await Product.findOne({
-            _id: product._id,
-            ...tenantWhereClause(organizationId),
-          })
-            .select(select)
-            .lean();
-        }
+        const product = await loadProductForCartItem(item.product);
         if (!product) return null;
 
         const variantIdStr = item.variant != null ? String(item.variant) : "";
@@ -80,30 +83,46 @@ async function formatCartItems(cartItems: any[], organizationId: string) {
   return formattedItems.filter((item) => item !== null);
 }
 
-export async function getCart(userId: string, organizationId: string) {
-  const cart = await Cart.findOne({
-    user: userId,
-    ...tenantWhereClause(organizationId),
-  }).populate("items.product", "name images variants");
-  if (!cart) return { items: [], totalItems: 0 };
-  const formattedItems = await formatCartItems(cart.items, organizationId);
+/** Merge line items from every org-scoped cart (marketplace: user may shop multiple sellers). */
+async function mergedCartPayload(userId: string) {
+  const carts = await Cart.find({ user: userId }).populate("items.product", "name images variants");
+  const allItems = carts.flatMap((c) => c.items);
+  if (allItems.length === 0) return { items: [], totalItems: 0 };
+  const formattedItems = await formatCartItems(allItems);
   const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
   return { items: formattedItems, totalItems };
 }
 
+export async function getCart(userId: string, _organizationId: string) {
+  return mergedCartPayload(userId);
+}
+
 export async function addToCart(
   userId: string,
-  organizationId: string,
+  _jwtOrganizationId: string,
   data: { productId: string; variantId: string; quantity?: number }
 ) {
   const { productId, variantId, quantity = 1 } = data;
-  const productOk = await Product.exists({
-    _id: data.productId,
-    ...tenantWhereClause(organizationId),
-  });
-  if (!productOk) {
+
+  const product = await Product.findOne({
+    _id: productId,
+    isActive: { $ne: false },
+  })
+    .select(PRODUCT_SELECT_CART)
+    .lean();
+
+  if (!product) {
     throw new AppError("Product not found", 404, "PRODUCT_NOT_FOUND");
   }
+
+  if (product.pricingMode === "fixed") {
+    const ok = (product.variants || []).some((v: { _id?: unknown }) => String(v._id) === String(variantId));
+    if (!ok) {
+      throw new AppError("Invalid variant for this product", 400, "INVALID_VARIANT");
+    }
+  }
+
+  const organizationId = String(product.organizationId);
 
   let cart = await Cart.findOne({
     user: userId,
@@ -127,21 +146,20 @@ export async function addToCart(
     }
   }
   await cart.save();
-  await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items, organizationId);
-  const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
-  return { message: "Added to cart", totalItems, items: formattedItems };
+
+  const { items, totalItems } = await mergedCartPayload(userId);
+  return { message: "Added to cart", totalItems, items };
 }
 
 export async function removeFromCart(
   userId: string,
-  organizationId: string,
+  _organizationId: string,
   data: { productId: string; variantId: string }
 ) {
   const { productId, variantId } = data;
   const cart = await Cart.findOne({
     user: userId,
-    ...tenantWhereClause(organizationId),
+    items: { $elemMatch: { product: productId, variant: variantId } },
   });
   if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
 
@@ -151,21 +169,20 @@ export async function removeFromCart(
   );
   if (removeIdx !== -1) cart.items.splice(removeIdx, 1);
   await cart.save();
-  await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items, organizationId);
-  const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
-  return { message: "Item removed", totalItems, items: formattedItems };
+
+  const { items, totalItems } = await mergedCartPayload(userId);
+  return { message: "Item removed", totalItems, items };
 }
 
 export async function updateCartItem(
   userId: string,
-  organizationId: string,
+  _organizationId: string,
   data: { productId: string; variantId: string; quantity: number }
 ) {
   const { productId, variantId, quantity } = data;
   const cart = await Cart.findOne({
     user: userId,
-    ...tenantWhereClause(organizationId),
+    items: { $elemMatch: { product: productId, variant: variantId } },
   });
   if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
 
@@ -181,19 +198,15 @@ export async function updateCartItem(
     cart.items[itemIdx].quantity = quantity;
   }
   await cart.save();
-  await cart.populate("items.product", "name images variants");
-  const formattedItems = await formatCartItems(cart.items, organizationId);
-  const totalItems = formattedItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
-  return { message: "Cart updated", totalItems, items: formattedItems };
+
+  const { items, totalItems } = await mergedCartPayload(userId);
+  return { message: "Cart updated", totalItems, items };
 }
 
-export async function clearCart(userId: string, organizationId: string) {
-  const cart = await Cart.findOne({
-    user: userId,
-    ...tenantWhereClause(organizationId),
-  });
-  if (!cart) throw new AppError("Cart not found", 404, "CART_NOT_FOUND");
-  cart.items.splice(0, cart.items.length);
-  await cart.save();
+export async function clearCart(userId: string, _organizationId: string) {
+  const result = await Cart.updateMany({ user: userId }, { $set: { items: [] } });
+  if (result.matchedCount === 0) {
+    return { message: "Cart cleared", totalItems: 0, items: [] };
+  }
   return { message: "Cart cleared", totalItems: 0, items: [] };
 }

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { ParamsDictionary } from "express-serve-static-core";
 import { z } from "zod";
-import { AppError } from "../utils/AppError";
+import { AppError } from "../utils/AppError.js";
 
 type SchemaWithBody = z.ZodObject<{ body: z.ZodTypeAny }>;
 type SchemaWithParams = z.ZodObject<{ params: z.ZodTypeAny }>;

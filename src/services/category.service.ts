@@ -1,9 +1,9 @@
-import Category from "../models/Category";
+import Category from "../models/Category.js";
 import slugify from "slugify";
 import mongoose from "mongoose";
-import { AppError } from "../utils/AppError";
-import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
-import { tenantFilterFromActor } from "../utils/tenantFilter";
+import { AppError } from "../utils/AppError.js";
+import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope.js";
+import { tenantFilterFromActor } from "../utils/tenantFilter.js";
 
 export async function createCategory(
   organizationId: string,

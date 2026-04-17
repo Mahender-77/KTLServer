@@ -1,7 +1,7 @@
 import mongoose, { ClientSession } from "mongoose";
-import { logger } from "../utils/logger";
-import AuditLog from "../models/AuditLog";
-import { paginated, PaginatedResponse } from "../utils/pagination";
+import { logger } from "../utils/logger.js";
+import AuditLog from "../models/AuditLog.js";
+import { paginated, PaginatedResponse } from "../utils/pagination.js";
 
 export async function appendAuditLog(
   input: {

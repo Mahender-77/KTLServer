@@ -1,6 +1,6 @@
-import { ROLES } from "../constants/roles";
-import type { RequestActor } from "../types/access";
-import { AppError } from "../utils/AppError";
+import { ROLES } from "../constants/roles.js";
+import type { RequestActor } from "../types/access.js";
+import { AppError } from "../utils/AppError.js";
 /**
  * Enforce resource.user === actor (or admin). Use when loading by id without user in query.
  * Admins remain scoped to their organization unless a future super-admin role is introduced.

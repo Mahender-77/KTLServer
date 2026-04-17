@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { objectIdString } from "./common";
+import { objectIdString } from "./common.js";
 
 export const patchInventoryThresholdSchema = z.object({
   params: z.object({ productId: objectIdString }),

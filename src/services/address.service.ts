@@ -1,9 +1,9 @@
-import Address from "../models/Address";
-import { AppError } from "../utils/AppError";
-import { ROLES } from "../constants/roles";
-import type { RequestActor } from "../types/access";
-import { assertOwnerOrAdmin } from "./resourceAccess";
-import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
+import Address from "../models/Address.js";
+import { AppError } from "../utils/AppError.js";
+import { ROLES } from "../constants/roles.js";
+import type { RequestActor } from "../types/access.js";
+import { assertOwnerOrAdmin } from "./resourceAccess.js";
+import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope.js";
 
 export async function getAddresses(actor: RequestActor) {
   const base = tenantWhereClause(actor.organizationId);

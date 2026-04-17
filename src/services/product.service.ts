@@ -1,18 +1,18 @@
-import Product from "../models/Product";
-import Store from "../models/Store";
-import Category from "../models/Category";
+import Product from "../models/Product.js";
+import Store from "../models/Store.js";
+import Category from "../models/Category.js";
 import slugify from "slugify";
 import mongoose from "mongoose";
-import { paginated, PaginatedResponse } from "../utils/pagination";
-import { AppError } from "../utils/AppError";
-import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
-import { tenantFilterFromActor } from "../utils/tenantFilter";
-import { syncInventoryFromProduct } from "./inventory.service";
+import { paginated, PaginatedResponse } from "../utils/pagination.js";
+import { AppError } from "../utils/AppError.js";
+import { tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope.js";
+import { tenantFilterFromActor } from "../utils/tenantFilter.js";
+import { syncInventoryFromProduct } from "./inventory.service.js";
 import {
   applyCreateProductFieldConfig,
   applyUpdateProductFieldConfig,
   getProductFieldConfigForOrganization,
-} from "../utils/productFieldConfig";
+} from "../utils/productFieldConfig.js";
 
 const now = () => new Date();
 

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { ROLES } from "../constants/roles";
+import { ROLES } from "../constants/roles.js";
 
 /**
  * Require an authenticated user whose role is one of `allowedRoles`.

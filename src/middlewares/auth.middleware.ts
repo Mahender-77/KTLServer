@@ -1,10 +1,10 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import User from "../models/User";
-import { AppError } from "../utils/AppError";
-import { getJwtAccessSecret } from "../config/env";
-import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap";
+import User from "../models/User.js";
+import { AppError } from "../utils/AppError.js";
+import { getJwtAccessSecret } from "../config/env.js";
+import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap.js";
 
 export interface AuthRequest extends Request {
   user?: InstanceType<typeof User>;
@@ -80,4 +80,4 @@ export const protect = async (
   }
 };
 
-export { adminOnly } from "./requireRole.middleware";
+export { adminOnly } from "./requireRole.middleware.js";

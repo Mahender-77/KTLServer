@@ -1,13 +1,13 @@
 import mongoose from "mongoose";
-import { logger } from "../utils/logger";
-import PushToken from "../models/PushToken";
-import User from "../models/User";
-import { ROLES } from "../constants/roles";
+import { logger } from "../utils/logger.js";
+import PushToken from "../models/PushToken.js";
+import User from "../models/User.js";
+import { ROLES } from "../constants/roles.js";
 import {
   sendPushNotification as sendSingleTokenNotification,
   sendToMultipleTokens,
   isExpoPushToken,
-} from "./pushNotificationService";
+} from "./pushNotificationService.js";
 
 /**
  * Deletes push token rows that Expo reports as no longer valid.
@@ -38,10 +38,16 @@ export async function sendPushNotification(
       logger.warn("[push] sendPushNotification: invalid Expo push token");
       return;
     }
+    logger.info("[push] sending notification", {
+      title,
+      userCount: 1,
+      tokenSuffixes: [`...${token.slice(-6)}`],
+    });
     const { invalidTokens } = await sendSingleTokenNotification(token, title, body, data ?? {});
     if (invalidTokens.length > 0) {
       await deleteInvalidTokens(invalidTokens);
     }
+    logger.info("[push] notification sent successfully", { title, userCount: 1 });
   } catch (err) {
     logger.error("[push] sendPushNotification failed", {
       error: err instanceof Error ? err.message : String(err),
@@ -60,10 +66,19 @@ export async function sendToUsers(
       logger.warn("[push] sendToUsers: no Expo push tokens");
       return;
     }
+    logger.info("[push] sending notification", {
+      title,
+      userCount: tokens.length,
+      tokenSuffixes: tokens.map((t) => `...${t.slice(-6)}`),
+    });
     const { invalidTokens } = await sendToMultipleTokens(tokens, title, body, data ?? {});
     if (invalidTokens.length > 0) {
       await deleteInvalidTokens(invalidTokens);
     }
+    logger.info("[push] notification sent successfully", {
+      title,
+      userCount: tokens.length,
+    });
   } catch (err) {
     logger.error("[push] sendToUsers failed", {
       error: err instanceof Error ? err.message : String(err),
@@ -71,16 +86,69 @@ export async function sendToUsers(
   }
 }
 
+/**
+ * Buyer / end-user notifications: resolve tokens by userId only so multi-tenant
+ * seller-order org vs buyer token org mismatches do not block delivery.
+ * `organizationId` is kept for API compatibility and logging context only.
+ */
 export async function getTokenStringsForUser(userId: string, organizationId: string): Promise<string[]> {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
   const rows = await PushToken.find({
-    userId: new mongoose.Types.ObjectId(userId),
-    organizationId: new mongoose.Types.ObjectId(organizationId),
+    userId: userObjectId,
   })
     .select("token")
     .lean();
-  return rows.map((r) => r.token);
+  const fromPushTokens = [...new Set(rows.map((r) => r.token).filter((t) => typeof t === "string" && t.length > 0))];
+  if (fromPushTokens.length > 0) {
+    logger.info("[push] tokens fetched", {
+      userId,
+      contextOrganizationId: organizationId,
+      count: fromPushTokens.length,
+      tokenSuffixes: fromPushTokens.map((t) => `...${t.slice(-6)}`),
+    });
+    return fromPushTokens;
+  }
+
+  logger.warn("[push] no tokens found", {
+    userId,
+    contextOrganizationId: organizationId,
+  });
+  return [];
 }
 
+/**
+ * Delivery (and other org-scoped) notifications: same user, tokens restricted to tenant.
+ */
+export async function getTokenStringsForUserInOrg(userId: string, organizationId: string): Promise<string[]> {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
+  const rows = await PushToken.find({
+    userId: userObjectId,
+    organizationId: orgObjectId,
+  })
+    .select("token")
+    .lean();
+  const fromPushTokens = [...new Set(rows.map((r) => r.token).filter((t) => typeof t === "string" && t.length > 0))];
+  if (fromPushTokens.length > 0) {
+    logger.info("[push] tokens fetched (org-scoped)", {
+      userId,
+      organizationId,
+      count: fromPushTokens.length,
+      tokenSuffixes: fromPushTokens.map((t) => `...${t.slice(-6)}`),
+    });
+    return fromPushTokens;
+  }
+
+  logger.warn("[push] no tokens found (org-scoped)", {
+    userId,
+    organizationId,
+  });
+  return [];
+}
+
+// DB stores field as "userId" — must match exactly
 async function getTokenStringsForUsers(userIds: string[], organizationId: string): Promise<string[]> {
   if (userIds.length === 0) return [];
   const objectIds = userIds.map((id) => new mongoose.Types.ObjectId(id));
@@ -90,7 +158,21 @@ async function getTokenStringsForUsers(userIds: string[], organizationId: string
   })
     .select("token")
     .lean();
-  return rows.map((r) => r.token);
+  const tokens = [...new Set(rows.map((r) => r.token).filter((t) => typeof t === "string" && t.length > 0))];
+  if (tokens.length === 0) {
+    logger.warn("[push] no tokens found", {
+      organizationId,
+      requestedUserCount: userIds.length,
+    });
+    return [];
+  }
+  logger.info("[push] tokens fetched", {
+    organizationId,
+    requestedUserCount: userIds.length,
+    count: tokens.length,
+    tokenSuffixes: tokens.map((t) => `...${t.slice(-6)}`),
+  });
+  return tokens;
 }
 
 function extractUserId(user: unknown): string | null {
@@ -109,6 +191,8 @@ export async function notifyOrderPlaced(order: {
   _id: { toString(): string };
   user?: unknown;
   organizationId: string | { toString(): string };
+  totalAmount?: number;
+  itemsCount?: number;
 }): Promise<void> {
   try {
     const buyerId = extractUserId(order.user);
@@ -121,10 +205,64 @@ export async function notifyOrderPlaced(order: {
       return;
     }
     const orderId = order._id.toString();
-    const tokens = await getTokenStringsForUser(buyerId, orgId);
-    await sendToUsers(tokens, "Order Confirmed 🎉", `Your order #${orderId} has been placed successfully`, {
+    const shortRef = orderId.length >= 8 ? orderId.slice(-8).toUpperCase() : orderId;
+    const itemsCount =
+      typeof order.itemsCount === "number" && Number.isFinite(order.itemsCount)
+        ? Math.max(0, Math.floor(order.itemsCount))
+        : undefined;
+    const totalPart =
+      typeof order.totalAmount === "number" && Number.isFinite(order.totalAmount)
+        ? `Total ₹${Math.floor(order.totalAmount).toLocaleString("en-IN")}. `
+        : "";
+    const itemsPart =
+      typeof itemsCount === "number" && itemsCount > 0
+        ? `${itemsCount} item${itemsCount === 1 ? "" : "s"} ordered. `
+        : "";
+    logger.info(`[push] notifyOrderPlaced start`, {
+      buyerId,
+      orgId,
       orderId,
-      type: "order_placed",
+      itemsCount: itemsCount ?? null,
+      totalAmount:
+        typeof order.totalAmount === "number" && Number.isFinite(order.totalAmount)
+          ? Math.floor(order.totalAmount)
+          : null,
+    });
+    const tokens = await getTokenStringsForUser(buyerId, orgId);
+    logger.info(`[push] notifyOrderPlaced tokens found: ${tokens.length}`, {
+      buyerId,
+      orgId,
+      orderId,
+      tokenSuffixes: tokens.map((t) => `…${t.slice(-12)}`),
+    });
+    if (tokens.length === 0) {
+      logger.warn("[push] notifyOrderPlaced skipped: no push tokens for buyer", {
+        buyerId,
+        orgId,
+        orderId,
+      });
+      return;
+    }
+    await sendToUsers(
+      tokens,
+      "You ordered items successfully 🛍️",
+      `${itemsPart}${totalPart}Order #${shortRef} placed successfully.`,
+      {
+        orderId,
+        type: "order_placed",
+        screen: "orders",
+        orderRef: shortRef,
+        itemsCount: itemsCount != null ? String(itemsCount) : undefined,
+        totalAmount:
+          typeof order.totalAmount === "number" && Number.isFinite(order.totalAmount)
+            ? String(Math.floor(order.totalAmount))
+            : undefined,
+      }
+    );
+    logger.info("[push] notifyOrderPlaced dispatched", {
+      buyerId,
+      orgId,
+      orderId,
     });
   } catch (err) {
     logger.error("[push] notifyOrderPlaced failed", {
@@ -143,7 +281,7 @@ export async function notifyDeliveryAssigned(
 ): Promise<void> {
   try {
     const subOrderId = subOrder._id.toString();
-    const tokens = await getTokenStringsForUser(deliveryUserId, organizationId);
+    const tokens = await getTokenStringsForUserInOrg(deliveryUserId, organizationId);
     await sendToUsers(
       tokens,
       "New Delivery Assigned 📦",
@@ -193,7 +331,7 @@ export async function notifyOrderStatusEvent(
   status: "confirmed" | "out_for_delivery" | "delivered" | "cancelled",
   orderId: string,
   organizationId: string
-): Promise<void> {
+): Promise<boolean> {
   const messageByStatus = {
     confirmed: {
       title: "Order Confirmed ✅",
@@ -215,31 +353,49 @@ export async function notifyOrderStatusEvent(
 
   try {
     const tokens = await getTokenStringsForUser(buyerId, organizationId);
+    logger.info(
+      `[push] notifyOrderStatusEvent buyerId=${buyerId} orgId=${organizationId} orderId=${orderId} status=${status} tokens=${tokens.length}`
+    );
+    if (tokens.length === 0) {
+      logger.warn(
+        `[push] notifyOrderStatusEvent skipped: no push tokens for buyerId=${buyerId} orderId=${orderId}`
+      );
+      return false;
+    }
     const msg = messageByStatus[status];
     await sendToUsers(tokens, msg.title, msg.body, {
       orderId,
       type: `order_${status}`,
     });
+    return true;
   } catch (err) {
     logger.error("[push] notifyOrderStatusEvent failed", {
       error: err instanceof Error ? err.message : String(err),
       status,
       orderId,
     });
+    return false;
   }
 }
 
-export async function notifyOtp(userId: string, organizationId: string, otp: string): Promise<void> {
+export async function notifyOtp(userId: string, organizationId: string, otp: string): Promise<boolean> {
   try {
     const tokens = await getTokenStringsForUser(userId, organizationId);
+    logger.info(`[push] notifyOtp userId=${userId} orgId=${organizationId} tokens=${tokens.length}`);
+    if (tokens.length === 0) {
+      logger.warn(`[push] notifyOtp skipped: no push tokens for userId=${userId}`);
+      return false;
+    }
     await sendToUsers(tokens, "Your OTP 🔐", `Your verification code is: ${otp}. Valid for 5 minutes.`, {
       type: "otp",
       otp,
     });
+    return true;
   } catch (err) {
     logger.error("[push] notifyOtp failed", {
       error: err instanceof Error ? err.message : String(err),
     });
+    return false;
   }
 }
 
@@ -307,6 +463,72 @@ export async function notifyCustomerDeliveryAssigned(params: {
   }
 }
 
+export async function notifyAdminsDeliveryUpdate(
+  organizationId: string,
+  orderId: string,
+  status: string
+): Promise<void> {
+  try {
+    const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+    const admins = await User.find({
+      organizationId: orgObjectId,
+      role: ROLES.ADMIN,
+    })
+      .select("_id")
+      .lean();
+    if (admins.length === 0) return;
+
+    const adminIds = admins.map((a) => String(a._id));
+    const tokens = await getTokenStringsForUsers(adminIds, organizationId);
+    if (tokens.length === 0) return;
+
+    await sendToUsers(tokens, "Delivery Update", `Order #${orderId} status changed to ${status}`, {
+      orderId,
+      type: "admin_delivery_update",
+      status,
+    });
+  } catch (err) {
+    logger.error("[push] notifyAdminsDeliveryUpdate failed", {
+      error: err instanceof Error ? err.message : String(err),
+      organizationId,
+      orderId,
+      status,
+    });
+  }
+}
+
+export async function notifyAdminsOrderAssigned(
+  organizationId: string,
+  orderId: string,
+  deliveryBoyName: string
+): Promise<void> {
+  try {
+    const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+    const admins = await User.find({
+      organizationId: orgObjectId,
+      role: ROLES.ADMIN,
+    })
+      .select("_id")
+      .lean();
+    if (admins.length === 0) return;
+
+    const adminIds = [...new Set(admins.map((a) => String(a._id)))];
+    const tokens = await getTokenStringsForUsers(adminIds, organizationId);
+    if (tokens.length === 0) return;
+
+    await sendToUsers(tokens, "Order Assigned", `Order #${orderId} accepted by ${deliveryBoyName}`, {
+      orderId,
+      type: "admin_order_assigned",
+    });
+  } catch (err) {
+    logger.error("[push] notifyAdminsOrderAssigned failed", {
+      error: err instanceof Error ? err.message : String(err),
+      organizationId,
+      orderId,
+    });
+  }
+}
+
 /**
  * Tenant admins: new order alert (IDs only in data).
  */
@@ -330,6 +552,7 @@ export async function notifyClientAdminNewOrder(order: {
       .lean();
     if (admins.length === 0) return;
     const adminIds = admins.map((a) => a._id);
+    // DB stores field as "userId" — must match exactly
     const rows = await PushToken.find({
       userId: { $in: adminIds },
       organizationId: orgObjectId,
@@ -337,6 +560,10 @@ export async function notifyClientAdminNewOrder(order: {
       .select("token")
       .lean();
     const tokens = rows.map((r) => r.token);
+    if (tokens.length === 0) {
+      logger.info(`[push] notifyClientAdminNewOrder orgId=${orgId} adminTokens=0`);
+      return;
+    }
     await sendToUsers(
       tokens,
       "New Order Received 🛒",

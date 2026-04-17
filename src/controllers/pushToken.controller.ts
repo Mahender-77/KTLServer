@@ -1,10 +1,11 @@
 import { Response } from "express";
 import mongoose from "mongoose";
-import PushToken from "../models/PushToken";
-import User from "../models/User";
-import { AuthRequest } from "../middlewares/auth.middleware";
-import { requestActor } from "../utils/requestActor";
-import { AppError } from "../utils/AppError";
+import PushToken from "../models/PushToken.js";
+import User from "../models/User.js";
+import { AuthRequest } from "../middlewares/auth.middleware.js";
+import { requestActor } from "../utils/requestActor.js";
+import { AppError } from "../utils/AppError.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * POST /api/push/token — register or replace Expo push token for the authenticated user (tenant-scoped).
@@ -12,22 +13,48 @@ import { AppError } from "../utils/AppError";
 export const registerToken = async (req: AuthRequest, res: Response): Promise<void> => {
   const actor = requestActor(req);
   const { token, platform } = req.body as { token: string; platform: string };
+  const trimmedToken = token.trim();
 
   const userId = new mongoose.Types.ObjectId(actor.userId);
   const organizationId = new mongoose.Types.ObjectId(actor.organizationId);
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Safe ownership transfer: if this token exists, bind it to current actor.
+      await PushToken.updateMany(
+        { token: trimmedToken },
+        { $set: { userId, organizationId, platform } },
+        { session }
+      );
 
-  await PushToken.findOneAndUpdate(
-    { token: token.trim() },
-    {
-      $set: {
-        userId,
-        organizationId,
-        platform,
-      },
-    },
-    { upsert: true, new: true, runValidators: true }
-  );
-  await User.updateOne({ _id: userId }, { $set: { expoPushToken: token.trim() } });
+      // Keep a single active token per user to avoid stale device tokens.
+      await PushToken.deleteMany(
+        {
+          userId,
+          token: { $ne: trimmedToken },
+        },
+        { session }
+      );
+
+      // Ensure current token exists for this user.
+      await PushToken.updateOne(
+        { userId, token: trimmedToken },
+        {
+          $set: { organizationId, platform },
+        },
+        { upsert: true, runValidators: true, session }
+      );
+
+      await User.updateOne({ _id: userId }, { $set: { expoPushToken: trimmedToken } }, { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  logger.info("[push] token registered", {
+    userId: actor.userId,
+    organizationId: actor.organizationId,
+  });
 
   res.status(200).json({ success: true, message: "Push token registered" });
 };

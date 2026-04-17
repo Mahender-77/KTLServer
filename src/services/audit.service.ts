@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import SuperAdminAuditLog from "../models/SuperAdminAuditLog";
+import SuperAdminAuditLog from "../models/SuperAdminAuditLog.js";
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

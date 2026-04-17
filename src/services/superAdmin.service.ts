@@ -1,17 +1,17 @@
 import mongoose from "mongoose";
-import Organization from "../models/Organization";
-import User from "../models/User";
-import Role from "../models/Role";
-import Plan from "../models/Plan";
-import { SUBSCRIPTION_STATUS } from "../models/Organization";
-import { AppError } from "../utils/AppError";
-import type { OrgModuleKey } from "../constants/modules";
-import type { ProductFieldConfig, ProductFieldKey } from "../constants/productFields";
-import { PRODUCT_FIELD_KEYS, DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields";
-import { invalidateProductFieldConfigCache } from "../utils/productFieldConfig";
-import { ROLES } from "../constants/roles";
-import { ensureDefaultRolesForOrganization } from "../migrations/organizationBootstrap";
-import { logSuperAdminAction } from "../utils/superAdminAudit";
+import Organization from "../models/Organization.js";
+import User from "../models/User.js";
+import Role from "../models/Role.js";
+import Plan from "../models/Plan.js";
+import { SUBSCRIPTION_STATUS } from "../models/Organization.js";
+import { AppError } from "../utils/AppError.js";
+import type { OrgModuleKey } from "../constants/modules.js";
+import type { ProductFieldConfig, ProductFieldKey } from "../constants/productFields.js";
+import { PRODUCT_FIELD_KEYS, DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields.js";
+import { invalidateProductFieldConfigCache } from "../utils/productFieldConfig.js";
+import { ROLES } from "../constants/roles.js";
+import { ensureDefaultRolesForOrganization } from "../migrations/organizationBootstrap.js";
+import { logSuperAdminAction } from "../utils/superAdminAudit.js";
 
 export async function listOrganizations(params: { page: number; limit: number }) {
   const skip = (params.page - 1) * params.limit;

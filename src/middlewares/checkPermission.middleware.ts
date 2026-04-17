@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import Role from "../models/Role";
-import { ROLES } from "../constants/roles";
-import { AppError } from "../utils/AppError";
-import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions";
+import Role from "../models/Role.js";
+import { ROLES } from "../constants/roles.js";
+import { AppError } from "../utils/AppError.js";
+import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions.js";
 
 type LegacyRole = (typeof ROLES)[keyof typeof ROLES];
 

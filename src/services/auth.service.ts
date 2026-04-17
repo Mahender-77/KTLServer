@@ -1,28 +1,28 @@
-import { logger } from "../utils/logger";
+import { logger } from "../utils/logger.js";
 import crypto from "crypto";
 import mongoose from "mongoose";
-import User from "../models/User";
-import Organization from "../models/Organization";
-import RefreshToken from "../models/RefreshToken";
-import { ROLES } from "../constants/roles";
+import User from "../models/User.js";
+import Organization from "../models/Organization.js";
+import RefreshToken from "../models/RefreshToken.js";
+import { ROLES } from "../constants/roles.js";
 import {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
-} from "../utils/generateToken";
-import { hashRefreshToken } from "../utils/tokenHash";
-import { AppError } from "../utils/AppError";
+} from "../utils/generateToken.js";
+import { hashRefreshToken } from "../utils/tokenHash.js";
+import { AppError } from "../utils/AppError.js";
 import {
   DEFAULT_ORG_NAME,
   refreshDefaultOrgCache,
   setDefaultOrganizationCache,
   ensureDefaultRolesForOrganization,
-} from "../migrations/organizationBootstrap";
-import Role from "../models/Role";
-import { DEFAULT_ORG_MODULES, ORG_MODULE_KEYS } from "../constants/modules";
-import { DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields";
-import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions";
-import { appendAuditLogSafe } from "./auditLog.service";
+} from "../migrations/organizationBootstrap.js";
+import Role from "../models/Role.js";
+import { DEFAULT_ORG_MODULES, ORG_MODULE_KEYS } from "../constants/modules.js";
+import { DEFAULT_PRODUCT_FIELD_CONFIG } from "../constants/productFields.js";
+import { mergeWithTenantAdminDefaults } from "../constants/tenantAdminPermissions.js";
+import { appendAuditLogSafe } from "./auditLog.service.js";
 
 const REFRESH_TOKEN_DAYS = 7;
 
