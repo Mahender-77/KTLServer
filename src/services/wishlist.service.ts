@@ -1,8 +1,8 @@
 import mongoose from "mongoose";
-import Wishlist from "../models/Wishlist";
-import Product from "../models/Product";
-import { AppError } from "../utils/AppError";
-import { tenantWhereClause } from "../utils/tenantScope";
+import Wishlist from "../models/Wishlist.js";
+import Product from "../models/Product.js";
+import { AppError } from "../utils/AppError.js";
+import { tenantWhereClause } from "../utils/tenantScope.js";
 
 export async function getWishlist(userId: string, organizationId: string) {
   const wishlist = await Wishlist.findOne({

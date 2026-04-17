@@ -1,13 +1,13 @@
-import Order from "../models/Order";
-import SubOrder from "../models/SubOrder";
-import { paginated, PaginatedResponse } from "../utils/pagination";
-import { AppError } from "../utils/AppError";
-import { ROLES } from "../constants/roles";
-import type { RequestActor } from "../types/access";
-import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope";
-import * as pushService from "./push.service";
+import Order from "../models/Order.js";
+import SubOrder from "../models/SubOrder.js";
+import { paginated, PaginatedResponse } from "../utils/pagination.js";
+import { AppError } from "../utils/AppError.js";
+import { ROLES } from "../constants/roles.js";
+import type { RequestActor } from "../types/access.js";
+import { andWithTenant, tenantWhereClause, tenantScopedIdFilter } from "../utils/tenantScope.js";
+import * as pushService from "./push.service.js";
 
-function getBuyerUserIdFromSubOrder(subOrder: { order?: unknown }): string | null {
+function getBuyerUserIdFromSubOrder(subOrder: { order?: unknown }): string | null | undefined {
   const order = subOrder?.order;
   if (order == null || typeof order !== "object" || !("user" in order)) return null;
   const u = (order as { user?: unknown }).user;
@@ -139,8 +139,11 @@ export async function startSubOrderDelivery(userId: string, organizationId: stri
   {
     const buyerId = getBuyerUserIdFromSubOrder(subOrder);
     const orderId = subOrder.order?._id?.toString?.();
-    if (buyerId && orderId) {
-      void pushService.notifyOrderStatusChanged(buyerId, "In Transit", orderId, organizationId);
+    if (orderId) {
+      if (buyerId) {
+        void pushService.notifyOrderStatusChanged(buyerId, "In Transit", orderId, organizationId);
+      }
+      void pushService.notifyAdminsDeliveryUpdate(organizationId, orderId, "In Transit");
     }
   }
   return { message: "Delivery started", subOrder };
@@ -189,8 +192,11 @@ export async function completeSubOrderDelivery(userId: string, organizationId: s
   {
     const buyerId = getBuyerUserIdFromSubOrder(subOrder);
     const orderId = subOrder.order?._id?.toString?.();
-    if (buyerId && orderId) {
-      void pushService.notifyOrderStatusChanged(buyerId, "Delivered", orderId, organizationId);
+    if (orderId) {
+      if (buyerId) {
+        void pushService.notifyOrderStatusChanged(buyerId, "Delivered", orderId, organizationId);
+      }
+      void pushService.notifyAdminsDeliveryUpdate(organizationId, orderId, "Delivered");
     }
   }
 

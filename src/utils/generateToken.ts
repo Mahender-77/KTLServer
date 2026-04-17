@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { getJwtAccessSecret, getJwtRefreshSecret } from "../config/env";
+import { getJwtAccessSecret, getJwtRefreshSecret } from "../config/env.js";
 
 const ACCESS_EXPIRY = "15m";
 const REFRESH_EXPIRY = "7d";

@@ -1,4 +1,4 @@
-import type { ProductFieldConfig } from "../constants/productFields";
+import type { ProductFieldConfig } from "../constants/productFields.js";
 
 const DEFAULT_TTL_MS = 60_000;
 

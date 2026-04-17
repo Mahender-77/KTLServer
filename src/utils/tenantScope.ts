@@ -1,8 +1,8 @@
 import mongoose from "mongoose";
 import type { Request } from "express";
-import Organization from "../models/Organization";
-import { AppError } from "./AppError";
-import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap";
+import Organization from "../models/Organization.js";
+import { AppError } from "./AppError.js";
+import { tryGetDefaultOrganizationId } from "../migrations/organizationBootstrap.js";
 
 /** Public catalog: single org (header/query) or all active organizations (marketplace). */
 export type PublicCatalogScope =

@@ -1,10 +1,6 @@
 import multer from "multer";
+import cloudinaryStorage from "multer-storage-cloudinary";
 import cloudinary from "../config/cloudinary";
-
-// v2.x exports a factory function (not a class constructor).
-const cloudinaryStorage = require("multer-storage-cloudinary") as (
-  options: Record<string, unknown>
-) => any;
 
 const storage = cloudinaryStorage({
   cloudinary,

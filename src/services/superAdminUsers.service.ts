@@ -1,8 +1,8 @@
 import mongoose from "mongoose";
-import User from "../models/User";
-import Role from "../models/Role";
-import { AppError } from "../utils/AppError";
-import { logSuperAdminAction } from "../utils/superAdminAudit";
+import User from "../models/User.js";
+import Role from "../models/Role.js";
+import { AppError } from "../utils/AppError.js";
+import { logSuperAdminAction } from "../utils/superAdminAudit.js";
 
 const LEGACY_ROLES = ["user", "admin", "delivery"] as const;
 type LegacyRole = (typeof LEGACY_ROLES)[number];

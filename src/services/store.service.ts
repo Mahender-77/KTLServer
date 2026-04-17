@@ -1,9 +1,9 @@
 import mongoose from "mongoose";
-import Store from "../models/Store";
-import { paginated, PaginatedResponse } from "../utils/pagination";
-import { tenantWhereClause } from "../utils/tenantScope";
-import { AppError } from "../utils/AppError";
-import { tenantFilterFromActor } from "../utils/tenantFilter";
+import Store from "../models/Store.js";
+import { paginated, PaginatedResponse } from "../utils/pagination.js";
+import { tenantWhereClause } from "../utils/tenantScope.js";
+import { AppError } from "../utils/AppError.js";
+import { tenantFilterFromActor } from "../utils/tenantFilter.js";
 
 export async function createStore(
   organizationId: string,

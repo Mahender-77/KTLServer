@@ -1,12 +1,12 @@
-import Organization from "../models/Organization";
+import Organization from "../models/Organization.js";
 import {
   DEFAULT_PRODUCT_FIELD_CONFIG,
   PRODUCT_FIELD_KEYS,
   type ProductFieldConfig,
-} from "../constants/productFields";
-import { getCachedProductFieldConfig } from "./productFieldConfigCache";
+} from "../constants/productFields.js";
+import { getCachedProductFieldConfig } from "./productFieldConfigCache.js";
 
-export { invalidateProductFieldConfigCache } from "./productFieldConfigCache";
+export { invalidateProductFieldConfigCache } from "./productFieldConfigCache.js";
 
 async function fetchProductFieldConfigFromDb(
   organizationId: string

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
-import { logger } from "../utils/logger";
-import SuperAdminAuditLog from "../models/SuperAdminAuditLog";
+import { logger } from "../utils/logger.js";
+import SuperAdminAuditLog from "../models/SuperAdminAuditLog.js";
 
 async function persistSuperAdminAudit(
   action: string,

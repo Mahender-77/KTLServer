@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { objectIdString } from "./common";
-import { ORG_MODULE_KEYS } from "../constants/modules";
-import { PRODUCT_FIELD_KEYS } from "../constants/productFields";
+import { objectIdString } from "./common.js";
+import { ORG_MODULE_KEYS } from "../constants/modules.js";
+import { PRODUCT_FIELD_KEYS } from "../constants/productFields.js";
 
 const moduleKeySchema = z.string().refine(
   (m) => (ORG_MODULE_KEYS as readonly string[]).includes(m),

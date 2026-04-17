@@ -3,8 +3,8 @@ import {
   getCachedProductFieldConfig,
   getProductFieldConfigCacheTtlMs,
   invalidateProductFieldConfigCache,
-} from "./productFieldConfigCache";
-import { DEFAULT_PRODUCT_FIELD_CONFIG, type ProductFieldConfig } from "../constants/productFields";
+} from "./productFieldConfigCache.js";
+import { DEFAULT_PRODUCT_FIELD_CONFIG, type ProductFieldConfig } from "../constants/productFields.js";
 
 describe("productFieldConfigCache", () => {
   const orgId = "507f1f77bcf86cd799439011";

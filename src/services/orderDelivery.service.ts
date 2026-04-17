@@ -1,13 +1,13 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
-import Order from "../models/Order";
-import Store from "../models/Store";
-import User from "../models/User";
-import { ROLES } from "../constants/roles";
-import { AppError } from "../utils/AppError";
-import type { RequestActor } from "../types/access";
-import { andWithTenant, tenantWhereClause } from "../utils/tenantScope";
-import * as pushService from "./push.service";
+import Order from "../models/Order.js";
+import Store from "../models/Store.js";
+import User from "../models/User.js";
+import { ROLES } from "../constants/roles.js";
+import { AppError } from "../utils/AppError.js";
+import type { RequestActor } from "../types/access.js";
+import { andWithTenant, tenantWhereClause } from "../utils/tenantScope.js";
+import * as pushService from "./push.service.js";
 
 function toRadians(val: number): number {
   return (val * Math.PI) / 180;
@@ -65,9 +65,41 @@ export async function notifyNewOrderAvailable(orderId: string, organizationId: s
   const sLat = Number((store as any)?.location?.lat);
   const sLng = Number((store as any)?.location?.lng);
 
-  const deliveryUserIds = await getDeliveryBoyIds(organizationId);
-  for (const dId of deliveryUserIds) {
-    const u = await User.findById(dId).select("deliveryLastLat deliveryLastLng").lean();
+  const deliveryUsers = await User.find({
+    organizationId: new mongoose.Types.ObjectId(organizationId),
+    role: ROLES.DELIVERY,
+  })
+    .select("_id deliveryLastLat deliveryLastLng deliveryLastAt")
+    .lean();
+  if (deliveryUsers.length === 0) return;
+
+  // Optional targeting: prefer nearby & recently-active couriers.
+  // Safe fallback: if no one matches, keep legacy broadcast-to-all behavior.
+  const maxDistanceKm = Number(process.env.PUSH_DELIVERY_MAX_DISTANCE_KM ?? 10);
+  const maxLocationAgeMinutes = Number(process.env.PUSH_DELIVERY_LOCATION_MAX_AGE_MINUTES ?? 30);
+  const hasValidStoreCoords = Number.isFinite(sLat) && Number.isFinite(sLng);
+  const nowMs = Date.now();
+
+  const filteredUsers =
+    hasValidStoreCoords && Number.isFinite(maxDistanceKm) && Number.isFinite(maxLocationAgeMinutes)
+      ? deliveryUsers.filter((u) => {
+          const latVal = u?.deliveryLastLat;
+          const lngVal = u?.deliveryLastLng;
+          if (!Number.isFinite(latVal) || !Number.isFinite(lngVal)) return false;
+          const lat = Number(latVal);
+          const lng = Number(lngVal);
+          const lastAtMs = u?.deliveryLastAt ? new Date(u.deliveryLastAt).getTime() : 0;
+          if (!lastAtMs) return false;
+          const ageMinutes = (nowMs - lastAtMs) / (1000 * 60);
+          if (!Number.isFinite(ageMinutes) || ageMinutes > maxLocationAgeMinutes) return false;
+          const km = haversineDistanceKm(lat, lng, Number(sLat), Number(sLng));
+          return km <= maxDistanceKm;
+        })
+      : [];
+
+  const targetUsers = filteredUsers.length > 0 ? filteredUsers : deliveryUsers;
+  for (const u of targetUsers) {
+    const dId = String(u._id);
     let km = 0;
     if (
       Number.isFinite(sLat) &&
@@ -75,9 +107,14 @@ export async function notifyNewOrderAvailable(orderId: string, organizationId: s
       u?.deliveryLastLat != null &&
       u?.deliveryLastLng != null
     ) {
-      km = haversineDistanceKm(u.deliveryLastLat, u.deliveryLastLng, sLat, sLng);
+      km = haversineDistanceKm(
+        Number(u.deliveryLastLat),
+        Number(u.deliveryLastLng),
+        Number(sLat),
+        Number(sLng)
+      );
     }
-    const tokens = await pushService.getTokenStringsForUser(dId, organizationId);
+    const tokens = await pushService.getTokenStringsForUserInOrg(dId, organizationId);
     await pushService.sendToUsers(
       tokens,
       "New Order Available 📦",
@@ -185,6 +222,11 @@ export async function acceptOrder(actor: RequestActor, orderId: string) {
       deliveryUserIds: otherIds,
     });
   }
+  void pushService.notifyAdminsOrderAssigned(
+    actor.organizationId,
+    String(updated._id),
+    deliveryBoyName
+  );
 
   return { message: "Order accepted", order: updated };
 }
@@ -270,7 +312,14 @@ export async function sendDeliveryOtp(actor: RequestActor, orderId: string) {
       ? String((order.user as { _id: { toString(): string } })._id)
       : String(order.user ?? "");
   if (buyerId) {
-    void pushService.notifyOtp(buyerId, actor.organizationId, otp);
+    const pushed = await pushService.notifyOtp(buyerId, actor.organizationId, otp);
+    if (!pushed) {
+      throw new AppError(
+        "Customer has no registered push token. Ask customer to login and enable notifications.",
+        409,
+        "CUSTOMER_PUSH_TOKEN_MISSING"
+      );
+    }
   }
   return { message: "OTP sent to customer" };
 }

@@ -1,8 +1,8 @@
-import User from "../models/User";
-import Role from "../models/Role";
-import { AppError } from "../utils/AppError";
-import { ROLES } from "../constants/roles";
-import { ensureDefaultRolesForOrganization } from "../migrations/organizationBootstrap";
+import User from "../models/User.js";
+import Role from "../models/Role.js";
+import { AppError } from "../utils/AppError.js";
+import { ROLES } from "../constants/roles.js";
+import { ensureDefaultRolesForOrganization } from "../migrations/organizationBootstrap.js";
 
 export interface CreateAdminInput {
   name: string;
